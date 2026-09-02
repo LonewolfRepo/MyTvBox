@@ -1,0 +1,6 @@
+-keepattributes *Annotation*
+-keep class com.itv.blockbuster.data.remote.dto.** { *; }
+-keep class com.itv.blockbuster.domain.model.** { *; }
+-keep class com.itv.blockbuster.data.local.entity.** { *; }
+-dontwarn okhttp3.**
+-dontwarn retrofit2.**
