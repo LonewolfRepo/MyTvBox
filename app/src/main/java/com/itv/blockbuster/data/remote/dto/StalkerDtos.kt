@@ -105,6 +105,7 @@ data class VodDto(
     @SerialName("season_number") val seasonNumber: String? = null,
     @SerialName("season_series") val seasonSeries: String? = null,
     @SerialName("count") val count: Int = 0,
+    val country: String = "",
 )
 
 @Serializable

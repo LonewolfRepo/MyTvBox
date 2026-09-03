@@ -93,7 +93,21 @@ class VodRepository @Inject constructor(
                     type = storageType,
                     logoUrl = item.logoUrl,
                     cmd = item.cmd,
-                    categoryId = item.categoryId
+                    categoryId = item.categoryId,
+                    // Store full metadata
+                    description = item.description,
+                    director = item.director,
+                    actors = item.actors,
+                    year = item.year,
+                    duration = item.duration,
+                    ratingImdb = item.ratingImdb,
+                    ratingMpaa = item.ratingMpaa,
+                    age = item.age,
+                    addedDate = item.addedDate,
+                    genres = item.genres,
+                    country = item.country,
+                    timestamp = System.currentTimeMillis()
+
                 )
             )
         }

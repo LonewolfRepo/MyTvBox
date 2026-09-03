@@ -56,7 +56,6 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.itv.blockbuster.domain.model.PortalCategory
 import com.itv.blockbuster.ui.components.ChannelCarouselRow
-import com.itv.blockbuster.ui.components.ChannelListItem
 import com.itv.blockbuster.ui.components.ChannelTile
 import com.itv.blockbuster.ui.navigation.FormFactor
 import com.itv.blockbuster.ui.navigation.rememberFormFactor
@@ -80,12 +79,11 @@ fun LiveTvScreen(
     val formFactor = rememberFormFactor()
     val isTvOrLandscape = formFactor != FormFactor.MOBILE_PORTRAIT
     val isPortrait = formFactor == FormFactor.MOBILE_PORTRAIT
-
     var searchQuery by remember { mutableStateOf("") }
     var sortMode by remember { mutableStateOf(SortMode.DEFAULT) }
-
     val configuration = LocalConfiguration.current
     val dropdownWidth = (configuration.screenWidthDp.dp * 0.35f)
+    val favoriteIds by viewModel.favoriteIds.collectAsState()
 
     Box(modifier = Modifier.fillMaxSize().background(BbBackground)) {
         if (state.isLoading || state.isConnecting) {
@@ -109,7 +107,6 @@ fun LiveTvScreen(
             )
         } else {
             Column(modifier = Modifier.fillMaxSize()) {
-
                 LiveTvTopBar(
                     categories = state.categories,
                     selectedCategory = state.selectedCategory,
@@ -122,13 +119,9 @@ fun LiveTvScreen(
                             SortMode.Z_A -> SortMode.NUMERIC
                             SortMode.NUMERIC -> SortMode.DEFAULT
                         }
-                        // TODO: Implement sort functionality later
                     },
                     searchQuery = searchQuery,
-                    onSearchQueryChange = {
-                        searchQuery = it
-                        // TODO: Implement search filtering later
-                    },
+                    onSearchQueryChange = { searchQuery = it },
                     dropdownWidth = dropdownWidth,
                     isPortrait = isPortrait
                 )
@@ -137,7 +130,6 @@ fun LiveTvScreen(
                         state.selectedCategory?.id == "0" ||
                         state.selectedCategory?.id == "all" ||
                         state.selectedCategory == null
-
                 val filteredChannels = if (isAllCategory) {
                     state.allChannels
                 } else {
@@ -149,55 +141,39 @@ fun LiveTvScreen(
                         Text("No channels in this category", color = BbTextMuted)
                     }
                 } else {
-                    if (isAllCategory) {
-                        if (isTvOrLandscape) {
-                            LazyColumn(modifier = Modifier.fillMaxSize()) {
-                                val grouped = filteredChannels.groupBy { it.genreId }
-                                state.categories.forEach { cat ->
-                                    if (cat.id == "*" || cat.id == "0" || cat.id == "all") return@forEach
-                                    val channelsInCat = grouped[cat.id] ?: return@forEach
-                                    if (channelsInCat.isNotEmpty()) {
-                                        item(key = cat.id) {
-                                            ChannelCarouselRow(
-                                                title = cat.title,
-                                                channels = channelsInCat,
-                                                onChannelClick = { channel ->
-                                                    viewModel.getStreamUrl(channel.cmd) { url ->
-                                                        url?.let { onPlayChannel(it, channel.id) }
-                                                    }
-                                                },
-                                                onChannelLongClick = { channel ->
-                                                    if (channel.hasArchive) onOpenCatchup(channel.id)
+                    // FIX: Carousels ONLY for ALL on TV/landscape.
+                    // Everything else (portrait ALL + all specific categories) uses the tile grid.
+                    if (isAllCategory && isTvOrLandscape) {
+                        LazyColumn(modifier = Modifier.fillMaxSize()) {
+                            val grouped = filteredChannels.groupBy { it.genreId }
+                            state.categories.forEach { cat ->
+                                if (cat.id == "*" || cat.id == "0" || cat.id == "all") return@forEach
+                                val channelsInCat = grouped[cat.id] ?: return@forEach
+                                if (channelsInCat.isNotEmpty()) {
+                                    item(key = cat.id) {
+                                        ChannelCarouselRow(
+                                            title = cat.title,
+                                            channels = channelsInCat,
+                                            favoriteIds = favoriteIds,          // FIX: was missing
+                                            onChannelClick = { channel ->
+                                                viewModel.getStreamUrl(channel.cmd) { url ->
+                                                    onPlayChannel(url, channel.id)
                                                 }
-                                            )
-                                        }
+                                            },
+                                            onChannelLongClick = { channel ->
+                                                if (channel.hasArchive) onOpenCatchup(channel.id)
+                                            },
+                                            onFavoriteIconClick = { channel ->  // FIX: was missing
+                                                viewModel.toggleFavorite(channel)
+                                            }
+                                        )
                                     }
                                 }
-                                item { Spacer(Modifier.height(32.dp)) }
                             }
-                        } else {
-                            LazyColumn(
-                                modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                items(filteredChannels, key = { it.id }) { channel ->
-                                    ChannelListItem(
-                                        channel = channel,
-                                        onClick = {
-                                            viewModel.getStreamUrl(channel.cmd) { url ->
-                                                url?.let { onPlayChannel(it, channel.id) }
-                                            }
-                                        },
-                                        onLongClick = {
-                                            if (channel.hasArchive) onOpenCatchup(channel.id)
-                                        }
-                                    )
-                                }
-                                item { Spacer(Modifier.height(32.dp)) }
-                            }
+                            item { Spacer(Modifier.height(32.dp)) }
                         }
                     } else {
+                        // Tile grid: specific categories (any form factor) + portrait ALL
                         LazyVerticalGrid(
                             columns = GridCells.Adaptive(minSize = 150.dp),
                             contentPadding = PaddingValues(24.dp),
@@ -208,15 +184,15 @@ fun LiveTvScreen(
                             items(filteredChannels, key = { it.id }) { channel ->
                                 ChannelTile(
                                     channel = channel,
+                                    isFavorite = favoriteIds.contains(channel.id),
                                     modifier = Modifier.fillMaxWidth(),
                                     onClick = {
                                         viewModel.getStreamUrl(channel.cmd) { url ->
-                                            url?.let { onPlayChannel(it, channel.id) }
+                                            onPlayChannel(url, channel.id)
                                         }
                                     },
-                                    onLongClick = {
-                                        if (channel.hasArchive) onOpenCatchup(channel.id)
-                                    }
+                                    onLongClick = { viewModel.toggleFavorite(channel) },
+                                    onFavoriteIconClick = { viewModel.toggleFavorite(channel) }
                                 )
                             }
                             item { Spacer(Modifier.height(32.dp)) }
@@ -255,7 +231,6 @@ private fun LiveTvTopBar(
             ) {
                 SortIconButton(mode = sortMode, onClick = onSortModeToggle)
             }
-
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -291,13 +266,9 @@ private fun LiveTvTopBar(
                 ),
                 shape = RoundedCornerShape(8.dp)
             )
-
             Spacer(modifier = Modifier.width(16.dp))
-
             SortIconButton(mode = sortMode, onClick = onSortModeToggle)
-
             Spacer(modifier = Modifier.width(16.dp))
-
             Box(modifier = Modifier.width(dropdownWidth)) {
                 CategoryDropdown(
                     categories = categories,
@@ -318,7 +289,6 @@ private fun SortIconButton(mode: SortMode, onClick: () -> Unit) {
         SortMode.Z_A -> Icons.Default.ArrowDownward to "Sort: Z to A"
         SortMode.NUMERIC -> Icons.Default.Numbers to "Sort: Numeric"
     }
-
     Box(
         modifier = Modifier
             .size(48.dp)
@@ -346,7 +316,6 @@ private fun CategoryDropdown(
 ) {
     var expanded by remember { mutableStateOf(false) }
     var isFocused by remember { mutableStateOf(false) }
-
     Box {
         Row(
             modifier = Modifier
@@ -376,7 +345,6 @@ private fun CategoryDropdown(
                 tint = BbTextSecondary
             )
         }
-
         DropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },

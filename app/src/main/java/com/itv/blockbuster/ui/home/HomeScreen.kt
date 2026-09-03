@@ -35,15 +35,16 @@ import com.itv.blockbuster.ui.theme.BbAccent
 import com.itv.blockbuster.ui.theme.BbBackground
 import com.itv.blockbuster.ui.theme.BbTextMuted
 import com.itv.blockbuster.ui.theme.BbTextSecondary
+import com.itv.blockbuster.util.VodNavigationCache
 
 @Composable
 fun HomeScreen(
     onOpenPortals: () -> Unit,
-    onOpenVodDetail: (String, String) -> Unit, // Added for VOD navigation
+    onOpenVodDetail: (String, String) -> Unit,
     viewModel: HomeViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsState()
-    val favoriteIds by viewModel.favoriteIds.collectAsState()   // ADD
+    val favoriteIds by viewModel.favoriteIds.collectAsState()
 
     Box(modifier = Modifier.fillMaxSize().background(BbBackground)) {
         when {
@@ -52,14 +53,19 @@ fun HomeScreen(
                 onRetry = viewModel::retry,
                 onOpenPortals = onOpenPortals
             )
-            (state.isLoading || state.isConnecting) && state.rows.isEmpty() -> LoadingOverlay(isConnecting = state.isConnecting)
+            (state.isLoading || state.isConnecting) && state.rows.isEmpty() ->
+                LoadingOverlay(isConnecting = state.isConnecting)
             else -> LazyColumn(modifier = Modifier.fillMaxSize()) {
                 item(key = "hero") { HeroBanner(hero = state.hero) }
                 items(state.rows, key = { it.id }) { row ->
                     CarouselRow(
                         row = row,
                         favoriteIds = favoriteIds,
-                        onItemClick = { item -> onOpenVodDetail(item.id, item.contentType) },
+                        onItemClick = { item ->
+                            // Cache item + route by isSeries (contentType from API is always "vod")
+                            VodNavigationCache.currentItem = item
+                            onOpenVodDetail(item.id, if (item.isSeries) "series" else "vod")
+                        },
                         onItemLongClick = { item -> viewModel.toggleFavorite(item) },
                         onFavoriteIconClick = { item -> viewModel.toggleFavorite(item) }
                     )
@@ -75,8 +81,11 @@ private fun LoadingOverlay(isConnecting: Boolean) {
     Column(modifier = Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
         Spacer(modifier = Modifier.weight(1f))
         CircularProgressIndicator(color = BbAccent)
-        Spacer(modifier = Modifier.height(16.dp))
-        Text(text = if (isConnecting) "Connecting to portal…" else "Loading…", color = BbTextMuted, fontSize = 14.sp)
+        Spacer(Modifier.height(16.dp))
+        Text(
+            text = if (isConnecting) "Connecting to portal…" else "Loading…",
+            color = BbTextMuted, fontSize = 14.sp
+        )
         Spacer(modifier = Modifier.weight(1f))
     }
 }
@@ -89,11 +98,11 @@ private fun ConnectionErrorOverlay(message: String, onRetry: () -> Unit, onOpenP
         verticalArrangement = Arrangement.Center
     ) {
         Icon(imageVector = Icons.Default.CloudOff, contentDescription = null, tint = BbTextMuted, modifier = Modifier.size(64.dp))
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(Modifier.height(16.dp))
         Text(text = "Connection problem", color = BbTextSecondary, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(Modifier.height(8.dp))
         Text(text = message, color = BbTextMuted, fontSize = 14.sp, textAlign = TextAlign.Center)
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(Modifier.height(24.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Button(onClick = onRetry) { Text("Retry") }
             OutlinedButton(onClick = onOpenPortals) { Text("Open Portals") }

@@ -21,7 +21,7 @@ import com.itv.blockbuster.data.local.entity.ServerEntity
         PlaybackProgressEntity::class,
         RecentLiveEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {

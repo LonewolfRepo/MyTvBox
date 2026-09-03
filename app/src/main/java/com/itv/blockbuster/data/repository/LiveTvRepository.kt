@@ -83,7 +83,20 @@ class LiveTvRepository @Inject constructor(
                     type = "LIVE",
                     logoUrl = channel.logoUrl,
                     cmd = channel.cmd,
-                    categoryId = channel.genreId
+                    categoryId = channel.genreId,
+                    // Channels don't have VOD metadata, leave blank
+                    description = "",
+                    director = "",
+                    actors = "",
+                    year = "",
+                    duration = "",
+                    ratingImdb = "",
+                    ratingMpaa = "",
+                    age = "",
+                    addedDate = "",
+                    genres = "",
+                    country = "",
+                    timestamp = System.currentTimeMillis()
                 )
             )
         }

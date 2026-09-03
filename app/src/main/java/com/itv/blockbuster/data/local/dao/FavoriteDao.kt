@@ -9,7 +9,7 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface FavoriteDao {
-    @Query("SELECT * FROM favorites WHERE profileId = :profileId AND serverId = :serverId AND type = :type ORDER BY addedAt DESC")
+    @Query("SELECT * FROM favorites WHERE profileId = :profileId AND serverId = :serverId AND type = :type ORDER BY timestamp DESC")
     fun getFavorites(profileId: Int, serverId: Int, type: String): Flow<List<FavoriteEntity>>
 
     @Query("SELECT EXISTS(SELECT 1 FROM favorites WHERE profileId = :profileId AND serverId = :serverId AND itemId = :itemId)")
@@ -23,4 +23,7 @@ interface FavoriteDao {
 
     @Query("DELETE FROM favorites WHERE profileId = :profileId AND serverId = :serverId AND type = :type")
     suspend fun clearFavorites(profileId: Int, serverId: Int, type: String)
+
+    @Query("DELETE FROM favorites WHERE profileId = :profileId AND serverId = :serverId")
+    suspend fun clearAll(profileId: Int, serverId: Int)
 }

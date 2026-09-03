@@ -1,21 +1,32 @@
 package com.itv.blockbuster.ui.hubs
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.layout.PaddingValues
+import com.itv.blockbuster.ui.components.ChannelTile
+import com.itv.blockbuster.ui.components.PosterCard
+import com.itv.blockbuster.util.VodNavigationCache
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -25,8 +36,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -39,6 +53,7 @@ import com.itv.blockbuster.ui.navigation.rememberFormFactor
 import com.itv.blockbuster.ui.theme.BbBackground
 import com.itv.blockbuster.ui.theme.BbDestructive
 import com.itv.blockbuster.ui.theme.BbTextMuted
+import com.itv.blockbuster.ui.theme.BbTextPrimary
 import com.itv.blockbuster.ui.theme.BbTextSecondary
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -57,99 +72,6 @@ data class HubUiState(
     val serverId: Int = 0
 )
 
-@HiltViewModel
-class FavoritesHubViewModel @Inject constructor(
-    private val favoriteDao: FavoriteDao,
-    private val prefs: UserPreferencesRepository,
-    private val session: StalkerSessionManager,
-    private val liveTvRepository: LiveTvRepository
-) : ViewModel() {
-
-    private val _uiState = MutableStateFlow(HubUiState())
-    val uiState: StateFlow<HubUiState> = _uiState.asStateFlow()
-
-    init {
-        viewModelScope.launch {
-            combine(prefs.activeProfileIdFlow, session.activePortal) { p, s ->
-                Pair(p, s?.serverId ?: 0)
-            }.flatMapLatest { (p, s) ->
-                combine(
-                    favoriteDao.getFavorites(p, s, "LIVE"),
-                    favoriteDao.getFavorites(p, s, "VOD"),
-                    favoriteDao.getFavorites(p, s, "SERIES")
-                ) { live, vod, series -> Triple(live, vod, series) }
-            }.collect { (live, vod, series) ->
-                val rows = buildList {
-                    if (live.isNotEmpty()) {
-                        add(
-                            HubRow(
-                                "live", "Favorite Live TV",
-                                live.map {
-                                    HubItem(
-                                        id = it.itemId, title = it.title, logoUrl = it.logoUrl,
-                                        kind = "LIVE", channelId = it.itemId, cmd = it.cmd
-                                    )
-                                }
-                            )
-                        )
-                    }
-                    if (vod.isNotEmpty()) {
-                        add(
-                            HubRow(
-                                "vod", "Favorite Movies",
-                                vod.map {
-                                    HubItem(
-                                        id = it.itemId, title = it.title, logoUrl = it.logoUrl,
-                                        kind = "MOVIE", videoId = it.itemId, year = it.year
-                                    )
-                                }
-                            )
-                        )
-                    }
-                    if (series.isNotEmpty()) {
-                        add(
-                            HubRow(
-                                "series", "Favorite TV Shows",
-                                series.map {
-                                    HubItem(
-                                        id = it.itemId, title = it.title, logoUrl = it.logoUrl,
-                                        kind = "SERIES", videoId = it.itemId, year = it.year
-                                    )
-                                }
-                            )
-                        )
-                    }
-                }
-                _uiState.update {
-                    it.copy(rows = rows, profileId = prefs.activeProfileIdFlow.let { f ->
-                        var v = it.profileId; f.collect { x -> v = x; }; v
-                    }, serverId = session.activePortal.value?.serverId ?: 0)
-                }
-            }
-        }
-    }
-
-    fun setHero(item: HubItem?) {
-        _uiState.update { it.copy(hero = item) }
-    }
-
-    fun playLive(item: HubItem, onUrl: (String) -> Unit) {
-        viewModelScope.launch {
-            val url = liveTvRepository.createStreamLink(item.cmd).getOrDefault("")
-            if (url.isNotEmpty()) onUrl(url)
-        }
-    }
-
-    fun clearAll() {
-        viewModelScope.launch {
-            val p = _uiState.value.profileId
-            val s = _uiState.value.serverId
-            favoriteDao.clearFavorites(p, s, "LIVE")
-            favoriteDao.clearFavorites(p, s, "VOD")
-            favoriteDao.clearFavorites(p, s, "SERIES")
-        }
-    }
-}
 
 @Composable
 fun FavoritesHubScreen(
@@ -157,48 +79,129 @@ fun FavoritesHubScreen(
     onOpenVod: (String) -> Unit,
     viewModel: FavoritesHubViewModel = hiltViewModel()
 ) {
-    val state by viewModel.uiState.collectAsState()
-    val formFactor = rememberFormFactor()
-    val isTv = formFactor == FormFactor.TV
-    var showClearDialog by remember { mutableStateOf(false) }
+    val movieItems by viewModel.movieItems.collectAsState()
+    val seriesItems by viewModel.seriesItems.collectAsState()
+    val liveChannels by viewModel.liveChannels.collectAsState()
+    val favoriteIds by viewModel.favoriteIds.collectAsState()
 
-    UnifiedHubScreen(
-        rows = state.rows,
-        hero = if (isTv) state.hero else null,
-        emptyIcon = {
-            Icon(Icons.Default.StarBorder, null, tint = BbTextMuted, modifier = Modifier.size(64.dp))
-        },
-        emptyText = "No favorites yet",
-        onItemClicked = { item ->
-            when (item.kind) {
-                "LIVE" -> viewModel.playLive(item) { url -> onPlayLive(url, item.channelId) }
-                else -> onOpenVod(item.videoId.ifEmpty { item.id })
+    Box(modifier = Modifier.fillMaxSize().background(BbBackground)) {
+        if (movieItems.isEmpty() && seriesItems.isEmpty() && liveChannels.isEmpty()) {
+            Column(
+                modifier = Modifier.fillMaxSize().padding(32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Icon(Icons.Default.Star, null, tint = BbTextMuted, modifier = Modifier.size(64.dp))
+                Spacer(Modifier.height(16.dp))
+                Text("No favorites yet", color = BbTextSecondary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Tap the star icon on any movie, TV show, or channel to add it here.",
+                    color = BbTextMuted, fontSize = 14.sp, textAlign = TextAlign.Center
+                )
             }
-        },
-        onItemFocused = { if (isTv) viewModel.setHero(it) },
-        onClearAll = { showClearDialog = true }
-    )
-
-    if (showClearDialog) {
-        AlertDialog(
-            onDismissRequest = { showClearDialog = false },
-            containerColor = BbBackground,
-            title = { Text("Clear all favorites?", color = BbTextSecondary) },
-            text = { Text("This removes every favorite for this profile on this portal.", color = BbTextMuted) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        viewModel.clearAll()
-                        showClearDialog = false
+        } else {
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                // Live TV channels
+                if (liveChannels.isNotEmpty()) {
+                    item {
+                        Text(
+                            "Live TV",
+                            color = BbTextPrimary,
+                            fontSize = 22.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 8.dp)
+                        )
                     }
-                ) { Text("Clear All", color = BbDestructive, fontWeight = FontWeight.Bold) }
-            },
-            dismissButton = {
-                TextButton(onClick = { showClearDialog = false }) {
-                    Text("Cancel", color = BbTextSecondary)
+                    item {
+                        LazyRow(
+                            contentPadding = PaddingValues(horizontal = 24.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            items(liveChannels, key = { it.id }) { channel ->
+                                ChannelTile(
+                                    channel = channel,
+                                    isFavorite = favoriteIds.contains(channel.id),
+                                    onClick = {
+                                        viewModel.getStreamUrl(channel.cmd) { url ->
+                                            if (url.isNotEmpty()) onPlayLive(url, channel.id)
+                                        }
+                                    },
+                                    onLongClick = {},
+                                    onFavoriteIconClick = { viewModel.toggleLiveFavorite(channel) }
+                                )
+                            }
+                        }
+                    }
                 }
+
+                // Movies carousel
+                if (movieItems.isNotEmpty()) {
+                    item {
+                        Text(
+                            "Movies",
+                            color = BbTextPrimary,
+                            fontSize = 22.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 8.dp)
+                        )
+                    }
+                    item {
+                        LazyRow(
+                            contentPadding = PaddingValues(horizontal = 24.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            items(movieItems, key = { it.id }) { item ->
+                                PosterCard(
+                                    item = item,
+                                    isFavorite = favoriteIds.contains(item.id),
+                                    onClick = {
+                                        VodNavigationCache.currentItem = item
+                                        onOpenVod(item.id)
+                                    },
+                                    onLongClick = { viewModel.toggleFavorite(item) },
+                                    onFavoriteIconClick = { viewModel.toggleFavorite(item) }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // TV Shows carousel
+                if (seriesItems.isNotEmpty()) {
+                    item {
+                        Text(
+                            "TV Shows",
+                            color = BbTextPrimary,
+                            fontSize = 22.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 8.dp)
+                        )
+                    }
+                    item {
+                        LazyRow(
+                            contentPadding = PaddingValues(horizontal = 24.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            items(seriesItems, key = { it.id }) { item ->
+                                PosterCard(
+                                    item = item,
+                                    isFavorite = favoriteIds.contains(item.id),
+                                    onClick = {
+                                        VodNavigationCache.currentItem = item
+                                        onOpenVod(item.id)
+                                    },
+                                    onLongClick = { viewModel.toggleFavorite(item) },
+                                    onFavoriteIconClick = { viewModel.toggleFavorite(item) }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                item { Spacer(Modifier.height(32.dp)) }
             }
-        )
+        }
     }
 }
 

@@ -69,7 +69,8 @@ data class PortalVodItem(
     val genres: String = "",
     val seasonSeries: String = "",
     val isSeries: Boolean,
-    val fileCount: Int = 0
+    val fileCount: Int = 0,
+    val country: String = "",
 )
 
 data class PortalPage<T>(

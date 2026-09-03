@@ -20,8 +20,10 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -33,8 +35,7 @@ data class HomeUiState(
     val isLoading: Boolean = false,
     val activeServerName: String = "",
     val hero: PortalVodItem? = null,
-    val rows: List<HomeRow> = emptyList(),
-    val favoriteIds: Set<String> = emptySet()
+    val rows: List<HomeRow> = emptyList()
 )
 
 @HiltViewModel
@@ -50,6 +51,7 @@ class HomeViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
+    // Live favorites (VOD + SERIES), re-scoped on profile/server change
     private val _favoriteIds = MutableStateFlow<Set<String>>(emptySet())
     val favoriteIds: StateFlow<Set<String>> = _favoriteIds.asStateFlow()
 
@@ -64,34 +66,20 @@ class HomeViewModel @Inject constructor(
                 ) { a, b -> (a + b).map { it.itemId }.toSet() }
             }.collect { _favoriteIds.value = it }
         }
-    }
 
-    fun toggleFavorite(item: PortalVodItem) {
-        viewModelScope.launch {
-            val p = prefs.activeProfileIdFlow.first()
-            val s = sessionManager.activePortal.value?.serverId ?: 0
-            vodRepository.toggleFavorite(p, s, item, if (item.isSeries) "SERIES" else "VOD")
-        }
-    }
-
-    init {
         viewModelScope.launch {
             serverRepository.getActiveServer().collect { server ->
                 if (server == null) {
-                    _uiState.update { it.copy(connectionError = "No portal configured. Add a portal to start watching", isConnecting = false) }
+                    _uiState.update {
+                        it.copy(
+                            connectionError = "No portal configured. Add a portal to start watching",
+                            isConnecting = false
+                        )
+                    }
                 } else {
                     _uiState.update { it.copy(activeServerName = server.name, connectionError = null) }
                     connectAndLoad(server)
                 }
-            }
-        }
-
-        // Track VOD Favorites
-        viewModelScope.launch {
-            val profileId = prefs.activeProfileIdFlow.first()
-            val serverId = sessionManager.activePortal.value?.serverId ?: 0
-            vodRepository.getFavorites(profileId, serverId, "VOD").collect { favs ->
-                _uiState.update { it.copy(favoriteIds = favs.map { f -> f.itemId }.toSet()) }
             }
         }
     }
@@ -103,14 +91,30 @@ class HomeViewModel @Inject constructor(
         }
     }
 
+    // Single normalized toggle — works for movies AND series
+    fun toggleFavorite(item: PortalVodItem) {
+        viewModelScope.launch {
+            val p = prefs.activeProfileIdFlow.first()
+            val s = sessionManager.activePortal.value?.serverId ?: 0
+            vodRepository.toggleFavorite(p, s, item, if (item.isSeries) "SERIES" else "VOD")
+        }
+    }
+
     private fun connectAndLoad(server: Server) {
         viewModelScope.launch {
             _uiState.update { it.copy(isConnecting = true, connectionError = null) }
-            val needsConnect = sessionManager.ajaxLoader.value.isEmpty() || sessionManager.activePortal.value?.serverId != server.id
+            val needsConnect = sessionManager.ajaxLoader.value.isEmpty() ||
+                    sessionManager.activePortal.value?.serverId != server.id
             if (needsConnect) {
                 val result = connectionRepository.connectToServer(server)
                 if (result.isFailure) {
-                    _uiState.update { it.copy(isConnecting = false, isConnected = false, connectionError = result.exceptionOrNull()?.message ?: "Connection failed") }
+                    _uiState.update {
+                        it.copy(
+                            isConnecting = false,
+                            isConnected = false,
+                            connectionError = result.exceptionOrNull()?.message ?: "Connection failed"
+                        )
+                    }
                     return@launch
                 }
             }
@@ -121,14 +125,16 @@ class HomeViewModel @Inject constructor(
 
     private suspend fun loadHome() {
         _uiState.update { it.copy(isLoading = true) }
-        val recentPage = portalService.fetchVodList(categoryId = "*", page = 1, pageSize = 15).getOrDefault(PortalPage(emptyList(), 0))
+        val recentPage = portalService.fetchVodList(categoryId = "*", page = 1, pageSize = 15)
+            .getOrDefault(PortalPage(emptyList(), 0))
         val categories = portalService.fetchVodCategories().getOrDefault(emptyList())
         val rowCategories = categories.filter { it.id != "*" && it.id != "0" }.take(6)
 
         val categoryRows = coroutineScope {
             rowCategories.map { category ->
                 async(Dispatchers.IO) {
-                    val page = portalService.fetchVodList(category.id, 1, 14).getOrDefault(PortalPage(emptyList(), 0))
+                    val page = portalService.fetchVodList(category.id, 1, 14)
+                        .getOrDefault(PortalPage(emptyList(), 0))
                     HomeRow(id = category.id, title = category.title, items = page.items)
                 }
             }.awaitAll().filter { it.items.isNotEmpty() }
@@ -140,17 +146,5 @@ class HomeViewModel @Inject constructor(
         }
 
         _uiState.update { it.copy(isLoading = false, hero = recentPage.items.firstOrNull(), rows = allRows) }
-    }
-
-    fun toggleFavorite(item: PortalVodItem) {
-        viewModelScope.launch {
-            val profileId = prefs.activeProfileIdFlow.first()
-            val serverId = sessionManager.activePortal.value?.serverId ?: 0
-            if (_uiState.value.favoriteIds.contains(item.id)) {
-                vodRepository.removeFavorite(profileId, serverId, item.id)
-            } else {
-                vodRepository.toggleFavorite(profileId, serverId, item, "VOD")
-            }
-        }
     }
 }

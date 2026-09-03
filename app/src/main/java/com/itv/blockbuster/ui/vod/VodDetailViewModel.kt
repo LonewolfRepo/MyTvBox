@@ -52,7 +52,7 @@ class VodDetailViewModel @Inject constructor(
         if (item != null) {
             _state.update { it.copy(item = item, isLoading = false) }
             loadMetadata(item)
-            if (contentType == "series") {
+            if (item.isSeries || contentType == "series")  {
                 loadSeasons(item)
             } else {
                 loadMovieProgress(item)

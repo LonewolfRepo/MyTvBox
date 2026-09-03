@@ -188,13 +188,16 @@ class SettingsViewModel @Inject constructor(
 
     fun clearAllUserData() {
         viewModelScope.launch {
-            val p = _state.value.profileId; val s = _state.value.serverId
-            favoriteDao.clearFavorites(p, s, "LIVE")
-            favoriteDao.clearFavorites(p, s, "VOD")
-            favoriteDao.clearFavorites(p, s, "SERIES")
-            recentDao.clearRecent(p, s)
-            progressDao.clearAll(p, s)
-            _notice.value = "All user data cleared"
+            val p = _state.value.profileId
+            val s = _state.value.serverId
+            try {
+                favoriteDao.clearAll(p, s)
+                recentDao.clearRecent(p, s)
+                progressDao.clearAll(p, s)
+                _notice.value = "All user data cleared"
+            } catch (e: Exception) {
+                _notice.value = "Failed to clear data: ${e.message}"
+            }
         }
     }
 }

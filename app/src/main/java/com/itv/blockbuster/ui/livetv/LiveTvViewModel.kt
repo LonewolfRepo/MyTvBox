@@ -50,20 +50,34 @@ class LiveTvViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(LiveTvUiState())
     val uiState: StateFlow<LiveTvUiState> = _uiState.asStateFlow()
 
+    private val _favoriteIds = MutableStateFlow<Set<String>>(emptySet())
+    val favoriteIds: StateFlow<Set<String>> = _favoriteIds.asStateFlow()
+
     init {
-        viewModelScope.launch {
+        /*viewModelScope.launch {
             combine(prefs.activeProfileIdFlow, sessionManager.activePortal) { p, sp ->
                 Pair(p, sp?.serverId ?: 0)
             }.flatMapLatest { (p, s) -> liveTvRepository.getFavorites(p, s, "LIVE") }
                 .collect { favs -> _uiState.update { it.copy(favoriteIds = favs.map { f -> f.itemId }.toSet()) } }
-        }
+        }*/
 
         viewModelScope.launch {
             combine(prefs.activeProfileIdFlow, sessionManager.activePortal) { p, sp ->
                 Pair(p, sp?.serverId ?: 0)
             }.collect { connectAndLoad() }
         }
+
+        viewModelScope.launch {
+            combine(prefs.activeProfileIdFlow, sessionManager.activePortal) { p, sp ->
+                Pair(p, sp?.serverId ?: 0)
+            }.flatMapLatest { (p, s) ->
+                liveTvRepository.getFavorites(p, s, "LIVE")
+            }.collect { favs ->
+                _favoriteIds.value = favs.map { it.itemId }.toSet()
+            }
+        }
     }
+
 
     private fun connectAndLoad() {
         viewModelScope.launch {
@@ -131,8 +145,7 @@ class LiveTvViewModel @Inject constructor(
         viewModelScope.launch {
             val p = prefs.activeProfileIdFlow.first()
             val s = sessionManager.activePortal.value?.serverId ?: 0
-            if (_uiState.value.favoriteIds.contains(channel.id)) liveTvRepository.removeFavorite(p, s, channel.id)
-            else liveTvRepository.toggleFavorite(p, s, channel)
+            liveTvRepository.toggleFavorite(p, s, channel)
         }
     }
 }

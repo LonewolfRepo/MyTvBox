@@ -14,10 +14,16 @@ data class FavoriteEntity(
     val logoUrl: String = "",
     val cmd: String = "",
     val categoryId: String = "",
-    val addedAt: Long = System.currentTimeMillis(),
+    val description: String = "",
+    val director: String = "",
+    val actors: String = "",
     val year: String = "",
     val duration: String = "",
     val ratingImdb: String = "",
     val ratingMpaa: String = "",
-    val genres: String = ""
+    val age: String = "",
+    val addedDate: String = "",
+    val genres: String = "",
+    val country: String = "",          // ADDED
+    val timestamp: Long = System.currentTimeMillis()
 )
