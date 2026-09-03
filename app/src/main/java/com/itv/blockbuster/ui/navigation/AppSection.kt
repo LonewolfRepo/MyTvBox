@@ -22,7 +22,7 @@ enum class AppSection(
     TV_SHOWS("tv_shows", "TV Shows", Icons.Default.Tv),
     LIVE_TV("live_tv", "Live TV", Icons.Default.LiveTv),
     TV_GUIDE("tv_guide", "TV Guide", Icons.Default.CalendarMonth),
-    MY_LIST("my_list", "My List", Icons.Default.Star),
+    MY_LIST("my_list", "Favorites", Icons.Default.Star),
     RECENT("recent", "Recent", Icons.Default.History),
     SETTINGS("settings", "Settings", Icons.Default.Settings)
 }

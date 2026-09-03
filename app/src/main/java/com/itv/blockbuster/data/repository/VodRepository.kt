@@ -9,6 +9,7 @@ import com.itv.blockbuster.domain.model.PortalCategory
 import com.itv.blockbuster.domain.model.PortalPage
 import com.itv.blockbuster.domain.model.PortalVodItem
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -73,18 +74,29 @@ class VodRepository @Inject constructor(
         favoriteDao.isFavorite(profileId, serverId, itemId)
 
     suspend fun toggleFavorite(profileId: Int, serverId: Int, item: PortalVodItem, type: String) {
-        favoriteDao.addFavorite(
-            FavoriteEntity(
-                profileId = profileId,
-                serverId = serverId,
-                itemId = item.id,
-                title = item.name,
-                type = type,
-                logoUrl = item.logoUrl,
-                cmd = item.cmd,
-                categoryId = item.categoryId
+        // Normalize so writers and readers agree: VOD / SERIES / LIVE
+        val storageType = when {
+            type.equals("series", ignoreCase = true) -> "SERIES"
+            type.equals("vod", ignoreCase = true) || type.equals("movie", ignoreCase = true) -> "VOD"
+            else -> type.uppercase()
+        }
+        val exists = favoriteDao.isFavorite(profileId, serverId, item.id).first()
+        if (exists) {
+            favoriteDao.removeFavorite(profileId, serverId, item.id)
+        } else {
+            favoriteDao.addFavorite(
+                FavoriteEntity(
+                    profileId = profileId,
+                    serverId = serverId,
+                    itemId = item.id,
+                    title = item.name,
+                    type = storageType,
+                    logoUrl = item.logoUrl,
+                    cmd = item.cmd,
+                    categoryId = item.categoryId
+                )
             )
-        )
+        }
     }
 
 

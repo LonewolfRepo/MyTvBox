@@ -36,7 +36,9 @@ import com.itv.blockbuster.ui.shell.AppShell
 import com.itv.blockbuster.ui.theme.BbAccent
 import com.itv.blockbuster.ui.theme.BbBackground
 import com.itv.blockbuster.ui.vod.VodBrowserScreen
+import com.itv.blockbuster.ui.vod.VodEpisodesScreen
 import com.itv.blockbuster.ui.vod.VodDetailScreen
+
 
 object Routes {
     const val PROFILE_PICKER = "profile_picker"
@@ -252,9 +254,28 @@ fun AppNavigation(startAtPicker: Boolean) {
                 navArgument("itemId") { type = NavType.StringType },
                 navArgument("contentType") { type = NavType.StringType }
             )
-        ) {
+        ) { backStackEntry ->
+            val contentType = backStackEntry.arguments?.getString("contentType") ?: "vod"
+            val itemId = backStackEntry.arguments?.getString("itemId") ?: ""
             AppShell(navController) {
                 VodDetailScreen(
+                    onPlay = { url -> navController.navigate("player/${encodeUrl(url)}/none/none") },
+                    onOpenEpisodes = {
+                        navController.navigate("vod_episodes/$itemId/$contentType")
+                    }
+                )
+            }
+        }
+
+        composable(
+            route = "vod_episodes/{itemId}/{contentType}",
+            arguments = listOf(
+                navArgument("itemId") { type = NavType.StringType },
+                navArgument("contentType") { type = NavType.StringType }
+            )
+        ) {
+            AppShell(navController) {
+                VodEpisodesScreen(
                     onPlay = { url -> navController.navigate("player/${encodeUrl(url)}/none/none") },
                     onBack = { navController.popBackStack() }
                 )

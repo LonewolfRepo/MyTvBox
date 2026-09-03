@@ -43,6 +43,7 @@ fun HomeScreen(
     viewModel: HomeViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsState()
+    val favoriteIds by viewModel.favoriteIds.collectAsState()   // ADD
 
     Box(modifier = Modifier.fillMaxSize().background(BbBackground)) {
         when {
@@ -57,7 +58,7 @@ fun HomeScreen(
                 items(state.rows, key = { it.id }) { row ->
                     CarouselRow(
                         row = row,
-                        favoriteIds = state.favoriteIds,
+                        favoriteIds = favoriteIds,
                         onItemClick = { item -> onOpenVodDetail(item.id, item.contentType) },
                         onItemLongClick = { item -> viewModel.toggleFavorite(item) },
                         onFavoriteIconClick = { item -> viewModel.toggleFavorite(item) }

@@ -50,6 +50,30 @@ class HomeViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
+    private val _favoriteIds = MutableStateFlow<Set<String>>(emptySet())
+    val favoriteIds: StateFlow<Set<String>> = _favoriteIds.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            combine(prefs.activeProfileIdFlow, sessionManager.activePortal) { p, sp ->
+                Pair(p, sp?.serverId ?: 0)
+            }.flatMapLatest { (p, s) ->
+                combine(
+                    vodRepository.getFavorites(p, s, "VOD"),
+                    vodRepository.getFavorites(p, s, "SERIES")
+                ) { a, b -> (a + b).map { it.itemId }.toSet() }
+            }.collect { _favoriteIds.value = it }
+        }
+    }
+
+    fun toggleFavorite(item: PortalVodItem) {
+        viewModelScope.launch {
+            val p = prefs.activeProfileIdFlow.first()
+            val s = sessionManager.activePortal.value?.serverId ?: 0
+            vodRepository.toggleFavorite(p, s, item, if (item.isSeries) "SERIES" else "VOD")
+        }
+    }
+
     init {
         viewModelScope.launch {
             serverRepository.getActiveServer().collect { server ->

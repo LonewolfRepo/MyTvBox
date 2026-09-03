@@ -8,6 +8,7 @@ import com.itv.blockbuster.data.repository.VodRepository
 import com.itv.blockbuster.data.session.StalkerSessionManager
 import com.itv.blockbuster.domain.model.PortalCategory
 import com.itv.blockbuster.domain.model.PortalPage
+import com.itv.blockbuster.domain.model.PortalVodItem
 import com.itv.blockbuster.ui.components.HomeRow
 import com.itv.blockbuster.util.CategorySortHelper
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -18,7 +19,9 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -45,12 +48,17 @@ class VodBrowserViewModel @Inject constructor(
     private val _state = MutableStateFlow(VodBrowserState())
     val state: StateFlow<VodBrowserState> = _state.asStateFlow()
 
+    // ── Favorites (live-updating) ──
+    private val _favoriteIds = MutableStateFlow<Set<String>>(emptySet())
+    val favoriteIds: StateFlow<Set<String>> = _favoriteIds.asStateFlow()
+
     private var isInitialized = false
 
     fun initialize(type: String) {
         if (isInitialized && _contentType == type) return
         _contentType = type
         isInitialized = true
+        observeFavorites()
 
         viewModelScope.launch {
             try {
@@ -63,11 +71,35 @@ class VodBrowserViewModel @Inject constructor(
         }
     }
 
+    private fun observeFavorites() {
+        viewModelScope.launch {
+            combine(prefs.activeProfileIdFlow, sessionManager.activePortal) { p, sp ->
+                Pair(p, sp?.serverId ?: 0)
+            }.flatMapLatest { (p, s) ->
+                vodRepository.getFavorites(p, s, if (_contentType == "series") "SERIES" else "VOD")
+            }.collect { favs ->
+                _favoriteIds.value = favs.map { it.itemId }.toSet()
+            }
+        }
+    }
+
+    fun toggleFavorite(item: PortalVodItem) {
+        viewModelScope.launch {
+            val p = prefs.activeProfileIdFlow.first()
+            val s = sessionManager.activePortal.value?.serverId ?: 0
+            vodRepository.toggleFavorite(p, s, item, if (_contentType == "series") "SERIES" else "VOD")
+        }
+    }
+
+    // =====================================================================
+    // CATEGORIES + ROWS
+    // =====================================================================
+
     private suspend fun loadInitialData(profileId: Int, serverId: Int) {
         _state.update { it.copy(isLoading = true) }
 
         try {
-            // Fetch master category list (always type=vod from API)
+            // Master list is ALWAYS "vod" categories for both Movies and TV Shows
             val masterCats = vodRepository.getCategories().getOrDefault(emptyList())
             val orderKey = if (_contentType == "series") "order_series" else "order_vod"
             val rawOrder = settings.getString(profileId, serverId, orderKey, "")
@@ -102,7 +134,6 @@ class VodBrowserViewModel @Inject constructor(
 
         try {
             if (search.isNotBlank()) {
-                // Search also filters by isSeries in VodRepository
                 val result = vodRepository.search(_contentType, search, category.id, 1)
                 val page = result.getOrDefault(PortalPage(emptyList(), 0))
                 _state.update {

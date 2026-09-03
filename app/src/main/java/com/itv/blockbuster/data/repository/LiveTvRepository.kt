@@ -11,6 +11,7 @@ import com.itv.blockbuster.domain.model.EpgProgram
 import com.itv.blockbuster.domain.model.PortalCategory
 import com.itv.blockbuster.domain.model.PortalChannel
 import com.itv.blockbuster.domain.model.PortalPage
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.Flow
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -69,18 +70,23 @@ class LiveTvRepository @Inject constructor(
         favoriteDao.getFavorites(profileId, serverId, type)
 
     suspend fun toggleFavorite(profileId: Int, serverId: Int, channel: PortalChannel) {
-        favoriteDao.addFavorite(
-            FavoriteEntity(
-                profileId = profileId,
-                serverId = serverId,
-                itemId = channel.id,
-                title = channel.name,
-                type = "LIVE",
-                logoUrl = channel.logoUrl,
-                cmd = channel.cmd,
-                categoryId = channel.genreId
+        val exists = favoriteDao.isFavorite(profileId, serverId, channel.id).first()
+        if (exists) {
+            favoriteDao.removeFavorite(profileId, serverId, channel.id)
+        } else {
+            favoriteDao.addFavorite(
+                FavoriteEntity(
+                    profileId = profileId,
+                    serverId = serverId,
+                    itemId = channel.id,
+                    title = channel.name,
+                    type = "LIVE",
+                    logoUrl = channel.logoUrl,
+                    cmd = channel.cmd,
+                    categoryId = channel.genreId
+                )
             )
-        )
+        }
     }
 
     suspend fun removeFavorite(profileId: Int, serverId: Int, itemId: String) =

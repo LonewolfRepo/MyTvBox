@@ -28,7 +28,8 @@ data class VodDetailState(
     val seasons: List<PortalVodItem> = emptyList(),
     val selectedSeason: PortalVodItem? = null,
     val episodes: List<PortalVodItem> = emptyList(),
-    val episodeProgressMap: Map<String, PlaybackProgressEntity> = emptyMap()
+    val episodeProgressMap: Map<String, PlaybackProgressEntity> = emptyMap(),
+    val episodeSortAscending: Boolean = true
 )
 
 @HiltViewModel
@@ -163,27 +164,18 @@ class VodDetailViewModel @Inject constructor(
     private fun loadEpisodes(season: PortalVodItem) {
         viewModelScope.launch {
             _state.update { it.copy(selectedSeason = season, isLoading = true) }
-
             try {
-                // FIX: Use season.id instead of season.seasonId
                 val episodesResult = vodRepository.getEpisodes(
                     movieId = season.movieId,
-                    seasonId = season.id  // CHANGED from season.seasonId
+                    seasonId = season.id
                 )
-
                 if (episodesResult.isFailure) {
                     _state.update { it.copy(isLoading = false) }
                     return@launch
                 }
-
-                val episodes = episodesResult.getOrDefault(emptyList())
-                _state.update {
-                    it.copy(
-                        episodes = episodes,
-                        isLoading = false
-                    )
-                }
-
+                val rawEpisodes = episodesResult.getOrDefault(emptyList())
+                val sortedEpisodes = sortEpisodes(rawEpisodes, _state.value.episodeSortAscending)
+                _state.update { it.copy(episodes = sortedEpisodes, isLoading = false) }
                 loadEpisodesProgress(season.movieId)
             } catch (e: Exception) {
                 _state.update { it.copy(isLoading = false) }
@@ -249,5 +241,67 @@ class VodDetailViewModel @Inject constructor(
         val item = _state.value.item ?: return
         loadMovieProgress(item)
         if (_state.value.hasSeasons) loadEpisodesProgress(item.id)
+    }
+    fun playMovieFromBeginning(onPlay: (String) -> Unit) {
+        val item = _state.value.item ?: return
+        viewModelScope.launch {
+            // Clear stored progress so player starts at 0
+            val profileId = prefs.activeProfileIdFlow.first()
+            val serverId = sessionManager.activePortal.value?.serverId ?: 0
+            val progress = vodRepository.getProgress(profileId, serverId, item.id)
+            if (progress != null) {
+                vodRepository.saveProgress(
+                    profileId = profileId, serverId = serverId,
+                    movieId = item.movieId.ifEmpty { item.id },
+                    seasonId = "", seasonNumber = "",
+                    episodeId = "", episodeNumber = "",
+                    videoId = item.id,
+                    positionMs = 0L,
+                    durationMs = progress.durationMs
+                )
+            }
+            _state.update { it.copy(movieProgress = null) }
+            playMovie(onPlay)
+        }
+    }
+    fun playEpisodeFromBeginning(episode: PortalVodItem, onPlay: (String) -> Unit) {
+        val item = _state.value.item ?: return
+        viewModelScope.launch {
+            val profileId = prefs.activeProfileIdFlow.first()
+            val serverId = sessionManager.activePortal.value?.serverId ?: 0
+            val progress = vodRepository.getProgress(profileId, serverId, episode.id)
+            if (progress != null) {
+                vodRepository.saveProgress(
+                    profileId = profileId, serverId = serverId,
+                    movieId = item.id,
+                    seasonId = _state.value.selectedSeason?.id ?: "",
+                    seasonNumber = _state.value.selectedSeason?.seasonNumber ?: "",
+                    episodeId = episode.id,
+                    episodeNumber = episode.episodeNumber,
+                    videoId = episode.id,
+                    positionMs = 0L,
+                    durationMs = progress.durationMs
+                )
+            }
+            _state.update {
+                it.copy(episodeProgressMap = it.episodeProgressMap - episode.id)
+            }
+            playEpisode(episode, onPlay)
+        }
+    }
+
+    fun toggleEpisodeSort() {
+        val current = _state.value
+        val newAscending = !current.episodeSortAscending
+        val sortedEpisodes = sortEpisodes(current.episodes, newAscending)
+        _state.update { it.copy(episodeSortAscending = newAscending, episodes = sortedEpisodes) }
+    }
+
+    private fun sortEpisodes(episodes: List<PortalVodItem>, ascending: Boolean): List<PortalVodItem> {
+        return if (ascending) {
+            episodes.sortedBy { it.episodeNumber.toIntOrNull() ?: Int.MAX_VALUE }
+        } else {
+            episodes.sortedByDescending { it.episodeNumber.toIntOrNull() ?: Int.MIN_VALUE }
+        }
     }
 }

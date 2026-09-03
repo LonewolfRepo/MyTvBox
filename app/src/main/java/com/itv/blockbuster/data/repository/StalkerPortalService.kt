@@ -376,7 +376,8 @@ class StalkerPortalService @Inject constructor(
         seasonNumber = if (isSeason) seasonNumber ?: "" else "",
         episodeNumber = if (isEpisode) seriesNumber ?: "" else "",
         genres = genresStr ?: "",
-        seasonSeries = seasonSeries ?: ""
+        seasonSeries = seasonSeries ?: "",
+        fileCount = count
     )
 
     private fun generateSerial(mac: String): String {

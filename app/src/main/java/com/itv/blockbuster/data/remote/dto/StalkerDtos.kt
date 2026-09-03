@@ -103,7 +103,8 @@ data class VodDto(
     @SerialName("series_number") val seriesNumber: String? = null,
     @SerialName("genres_str") val genresStr: String? = null,
     @SerialName("season_number") val seasonNumber: String? = null,
-    @SerialName("season_series") val seasonSeries: String? = null
+    @SerialName("season_series") val seasonSeries: String? = null,
+    @SerialName("count") val count: Int = 0,
 )
 
 @Serializable
