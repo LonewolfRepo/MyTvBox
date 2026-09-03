@@ -122,6 +122,15 @@ class VodDetailViewModel @Inject constructor(
 
                 _state.update { it.copy(isLoading = false) }
 
+                playbackManager.currentItemId = item.id
+                playbackManager.currentItemType = "VOD"
+                playbackManager.currentTitle = item.name
+
+                // ADD: Track Movie in Recents
+                val profileId = prefs.activeProfileIdFlow.first()
+                val serverId = sessionManager.activePortal.value?.serverId ?: 0
+                vodRepository.addRecent(profileId, serverId, item, "VOD")
+
                 // Step 4: Play the stream
                 if (url.isNotEmpty()) {
                     onPlay(url)
@@ -214,6 +223,14 @@ class VodDetailViewModel @Inject constructor(
                 val url = urlResult.getOrThrow()
 
                 _state.update { it.copy(isLoading = false) }
+
+                playbackManager.currentItemId = item.id // Use movieId so series groups together!
+                playbackManager.currentItemType = "SERIES"
+                playbackManager.currentTitle = episode.name
+
+                val profileId = prefs.activeProfileIdFlow.first()
+                val serverId = sessionManager.activePortal.value?.serverId ?: 0
+                vodRepository.addRecent(profileId, serverId, item, "SERIES")
 
                 if (url.isNotEmpty()) {
                     onPlay(url)

@@ -2,8 +2,10 @@ package com.itv.blockbuster.data.repository
 
 import com.itv.blockbuster.data.local.dao.FavoriteDao
 import com.itv.blockbuster.data.local.dao.PlaybackProgressDao
+import com.itv.blockbuster.data.local.dao.RecentDao
 import com.itv.blockbuster.data.local.entity.FavoriteEntity
 import com.itv.blockbuster.data.local.entity.PlaybackProgressEntity
+import com.itv.blockbuster.data.local.entity.RecentEntity
 import com.itv.blockbuster.data.session.StalkerSessionManager
 import com.itv.blockbuster.domain.model.PortalCategory
 import com.itv.blockbuster.domain.model.PortalPage
@@ -18,9 +20,9 @@ class VodRepository @Inject constructor(
     private val portalService: StalkerPortalService,
     private val sessionManager: StalkerSessionManager,
     private val favoriteDao: FavoriteDao,
-    private val progressDao: PlaybackProgressDao
+    private val progressDao: PlaybackProgressDao,
+    private val recentDao: RecentDao
 ) {
-
     suspend fun getCategories(): Result<List<PortalCategory>> {
         return portalService.fetchVodCategories()
     }
@@ -107,13 +109,10 @@ class VodRepository @Inject constructor(
                     genres = item.genres,
                     country = item.country,
                     timestamp = System.currentTimeMillis()
-
                 )
             )
         }
     }
-
-
 
     suspend fun removeFavorite(profileId: Int, serverId: Int, itemId: String) =
         favoriteDao.removeFavorite(profileId, serverId, itemId)
@@ -140,6 +139,41 @@ class VodRepository @Inject constructor(
                 videoId = videoId,
                 positionMs = positionMs,
                 durationMs = durationMs,
+                timestamp = System.currentTimeMillis()
+            )
+        )
+    }
+
+    /**
+     * Inserts or updates a VOD/Series item into the Recents table.
+     */
+    suspend fun addRecent(profileId: Int, serverId: Int, item: PortalVodItem, type: String) {
+        val storageType = when {
+            type.equals("series", ignoreCase = true) -> "SERIES"
+            type.equals("vod", ignoreCase = true) || type.equals("movie", ignoreCase = true) -> "VOD"
+            else -> type.uppercase()
+        }
+        recentDao.upsert(
+            RecentEntity(
+                profileId = profileId,
+                serverId = serverId,
+                itemId = item.id,
+                title = item.name,
+                type = storageType,
+                logoUrl = item.logoUrl,
+                cmd = item.cmd,
+                categoryId = item.categoryId,
+                description = item.description,
+                director = item.director,
+                actors = item.actors,
+                year = item.year,
+                duration = item.duration,
+                ratingImdb = item.ratingImdb,
+                ratingMpaa = item.ratingMpaa,
+                age = item.age,
+                addedDate = item.addedDate,
+                genres = item.genres,
+                country = item.country,
                 timestamp = System.currentTimeMillis()
             )
         )

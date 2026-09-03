@@ -3,7 +3,7 @@ package com.itv.blockbuster.data.repository
 import com.itv.blockbuster.data.local.dao.FavoriteDao
 import com.itv.blockbuster.data.local.dao.RecentDao
 import com.itv.blockbuster.data.local.entity.FavoriteEntity
-import com.itv.blockbuster.data.local.entity.RecentLiveEntity
+import com.itv.blockbuster.data.local.entity.RecentEntity
 import com.itv.blockbuster.data.remote.StalkerApi
 import com.itv.blockbuster.data.session.StalkerSessionManager
 import com.itv.blockbuster.domain.model.EpgDay
@@ -24,16 +24,12 @@ class LiveTvRepository @Inject constructor(
     private val favoriteDao: FavoriteDao,
     private val recentDao: RecentDao
 ) {
-
     private val epgCache = mutableMapOf<String, List<EpgProgram>>()
 
     // ── Network ──
     suspend fun getCategories(): Result<List<PortalCategory>> = portalService.fetchLiveCategories()
-
     suspend fun getAllChannels(): Result<PortalPage<PortalChannel>> = portalService.fetchAllLiveChannels()
-
     suspend fun createStreamLink(cmd: String): Result<String> = portalService.createStreamLink(cmd, "itv")
-
     suspend fun getShortEpg(channelId: String): Result<List<EpgProgram>> = portalService.fetchShortEpg(channelId)
 
     suspend fun getShortEpgCached(channelId: String): List<EpgProgram> {
@@ -109,26 +105,19 @@ class LiveTvRepository @Inject constructor(
         favoriteDao.clearFavorites(profileId, serverId, type)
 
     // ── Recents (profile + server scoped) ──
-    fun getRecent(profileId: Int, serverId: Int, limit: Int): Flow<List<RecentLiveEntity>> =
-        recentDao.getRecentLive(profileId, serverId, limit)
-
     suspend fun addRecent(profileId: Int, serverId: Int, channel: PortalChannel) {
-        recentDao.insertRecent(
-            RecentLiveEntity(
+        recentDao.upsert(
+            RecentEntity(
                 profileId = profileId,
                 serverId = serverId,
-                channelId = channel.id,
-                channelName = channel.name,
+                itemId = channel.id,
+                title = channel.name,
+                type = "LIVE",
                 logoUrl = channel.logoUrl,
-                number = channel.number,
-                cmd = channel.cmd
+                cmd = channel.cmd,
+                categoryId = channel.genreId,
+                timestamp = System.currentTimeMillis()
             )
         )
     }
-
-    suspend fun removeRecent(profileId: Int, serverId: Int, channelId: String) =
-        recentDao.deleteRecent(profileId, serverId, channelId)
-
-    suspend fun clearAllRecents(profileId: Int, serverId: Int) =
-        recentDao.clearRecent(profileId, serverId)
 }

@@ -180,8 +180,12 @@ fun AppNavigation(startAtPicker: Boolean) {
         composable(Routes.MY_LIST) {
             AppShell(navController) {
                 FavoritesHubScreen(
-                    onPlayLive = { url, channelId -> navController.navigate("player/${encodeUrl(url)}/$channelId/none") },
-                    onOpenVod = { itemId -> navController.navigate("vod_detail/$itemId/vod") }
+                    onPlayLive = { url, channelId ->
+                        navController.navigate("player/${encodeUrl(url)}/$channelId/none")
+                    },
+                    onOpenVod = { itemId, type ->
+                        navController.navigate("vod_detail/$itemId/$type")
+                    }
                 )
             }
         }
@@ -189,8 +193,12 @@ fun AppNavigation(startAtPicker: Boolean) {
         composable(Routes.RECENT) {
             AppShell(navController) {
                 RecentsHubScreen(
-                    onPlayLive = { url, channelId -> navController.navigate("player/${encodeUrl(url)}/$channelId/none") },
-                    onOpenVod = { itemId -> navController.navigate("vod_detail/$itemId/vod") }
+                    onPlayLive = { url, channelId ->
+                        navController.navigate("player/${encodeUrl(url)}/$channelId/none")
+                    },
+                    onOpenVod = { itemId, type ->
+                        navController.navigate("vod_detail/$itemId/$type")
+                    }
                 )
             }
         }

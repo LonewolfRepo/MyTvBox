@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
-
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -26,7 +25,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -37,10 +35,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -48,8 +44,6 @@ import com.itv.blockbuster.data.local.UserPreferencesRepository
 import com.itv.blockbuster.data.local.dao.FavoriteDao
 import com.itv.blockbuster.data.repository.LiveTvRepository
 import com.itv.blockbuster.data.session.StalkerSessionManager
-import com.itv.blockbuster.ui.navigation.FormFactor
-import com.itv.blockbuster.ui.navigation.rememberFormFactor
 import com.itv.blockbuster.ui.theme.BbBackground
 import com.itv.blockbuster.ui.theme.BbDestructive
 import com.itv.blockbuster.ui.theme.BbTextMuted
@@ -72,11 +66,10 @@ data class HubUiState(
     val serverId: Int = 0
 )
 
-
 @Composable
 fun FavoritesHubScreen(
     onPlayLive: (String, String) -> Unit,
-    onOpenVod: (String) -> Unit,
+    onOpenVod: (String, String) -> Unit, // FIXED: Restored (String, String) to match navigation graph and pass contentType
     viewModel: FavoritesHubViewModel = hiltViewModel()
 ) {
     val movieItems by viewModel.movieItems.collectAsState()
@@ -134,7 +127,6 @@ fun FavoritesHubScreen(
                         }
                     }
                 }
-
                 // Movies carousel
                 if (movieItems.isNotEmpty()) {
                     item {
@@ -157,7 +149,7 @@ fun FavoritesHubScreen(
                                     isFavorite = favoriteIds.contains(item.id),
                                     onClick = {
                                         VodNavigationCache.currentItem = item
-                                        onOpenVod(item.id)
+                                        onOpenVod(item.id, item.contentType) // FIXED: Pass contentType
                                     },
                                     onLongClick = { viewModel.toggleFavorite(item) },
                                     onFavoriteIconClick = { viewModel.toggleFavorite(item) }
@@ -166,7 +158,6 @@ fun FavoritesHubScreen(
                         }
                     }
                 }
-
                 // TV Shows carousel
                 if (seriesItems.isNotEmpty()) {
                     item {
@@ -189,7 +180,7 @@ fun FavoritesHubScreen(
                                     isFavorite = favoriteIds.contains(item.id),
                                     onClick = {
                                         VodNavigationCache.currentItem = item
-                                        onOpenVod(item.id)
+                                        onOpenVod(item.id, item.contentType) // FIXED: Pass contentType
                                     },
                                     onLongClick = { viewModel.toggleFavorite(item) },
                                     onFavoriteIconClick = { viewModel.toggleFavorite(item) }
@@ -198,7 +189,6 @@ fun FavoritesHubScreen(
                         }
                     }
                 }
-
                 item { Spacer(Modifier.height(32.dp)) }
             }
         }
@@ -208,7 +198,6 @@ fun FavoritesHubScreen(
 // =====================================================================
 // SHARED HUB LAYOUT
 // =====================================================================
-
 @Composable
 fun UnifiedHubScreen(
     rows: List<HubRow>,

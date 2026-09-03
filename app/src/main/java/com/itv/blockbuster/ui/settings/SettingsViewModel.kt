@@ -9,6 +9,7 @@ import com.itv.blockbuster.data.local.UserPreferencesRepository
 import com.itv.blockbuster.data.local.dao.FavoriteDao
 import com.itv.blockbuster.data.local.dao.PlaybackProgressDao
 import com.itv.blockbuster.data.local.dao.RecentDao
+import com.itv.blockbuster.data.repository.RecentRepository
 import com.itv.blockbuster.data.repository.LiveTvRepository
 import com.itv.blockbuster.data.repository.VodRepository
 import com.itv.blockbuster.data.session.StalkerSessionManager
@@ -58,6 +59,7 @@ class SettingsViewModel @Inject constructor(
     private val progressDao: PlaybackProgressDao,
     private val vodRepository: VodRepository,
     private val liveTvRepository: LiveTvRepository,
+    private val recentRepository: RecentRepository,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -192,7 +194,7 @@ class SettingsViewModel @Inject constructor(
             val s = _state.value.serverId
             try {
                 favoriteDao.clearAll(p, s)
-                recentDao.clearRecent(p, s)
+                recentRepository.clearAll(p, s) // NEW
                 progressDao.clearAll(p, s)
                 _notice.value = "All user data cleared"
             } catch (e: Exception) {

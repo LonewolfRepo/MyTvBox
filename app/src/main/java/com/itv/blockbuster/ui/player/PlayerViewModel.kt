@@ -8,6 +8,7 @@ import com.itv.blockbuster.data.local.entity.PlaybackProgressEntity
 import com.itv.blockbuster.data.player.PlaybackManager
 import com.itv.blockbuster.data.repository.LiveTvRepository
 import com.itv.blockbuster.data.repository.VodRepository
+import com.itv.blockbuster.data.repository.RecentRepository
 import com.itv.blockbuster.data.session.StalkerSessionManager
 import com.itv.blockbuster.domain.model.EpgProgram
 import com.itv.blockbuster.domain.model.PortalChannel
@@ -36,7 +37,8 @@ class PlayerViewModel @Inject constructor(
     private val vodRepository: VodRepository,
     private val settings: SettingsRepository,
     private val prefs: UserPreferencesRepository,
-    private val sessionManager: StalkerSessionManager
+    private val sessionManager: StalkerSessionManager,
+    private val recentRepository: RecentRepository
 ) : ViewModel() {
 
     val autoPlayNext: StateFlow<Boolean> = prefs.autoPlayNextFlow
@@ -45,7 +47,6 @@ class PlayerViewModel @Inject constructor(
     // ── Seek intervals (per profile + server settings) ──
     private val _rewindMs = MutableStateFlow(15_000L)
     val rewindMs: StateFlow<Long> = _rewindMs.asStateFlow()
-
     private val _forwardMs = MutableStateFlow(30_000L)
     val forwardMs: StateFlow<Long> = _forwardMs.asStateFlow()
 
@@ -72,17 +73,14 @@ class PlayerViewModel @Inject constructor(
     // =====================================================================
     // LIVE
     // =====================================================================
-
     suspend fun initLive(channelId: String) {
         if (playbackManager.channelList.isEmpty()) {
             val all = liveTvRepository.getAllChannels()
                 .getOrDefault(PortalPage(emptyList(), 0)).items
             playbackManager.channelList = all
         }
-
         val channel = playbackManager.channelList.firstOrNull { it.id == channelId }
             ?: playbackManager.currentChannel
-
         if (channel != null) {
             playbackManager.currentChannel = channel
             val epg = liveTvRepository.getShortEpg(channel.id).getOrDefault(emptyList())
@@ -96,12 +94,17 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
+    private fun saveToRecents() {
+        viewModelScope.launch {
+            recentRepository.saveFromPlayback(playbackManager)
+        }
+    }
+
     fun zap(delta: Int) {
         viewModelScope.launch {
             val next = playbackManager.zap(delta) ?: return@launch
             val url = liveTvRepository.createStreamLink(next.cmd).getOrDefault("")
             if (url.isEmpty()) return@launch
-
             playbackManager.currentChannel = next
             val epg = liveTvRepository.getShortEpg(next.id).getOrDefault(emptyList())
             playbackManager.epgPrograms = epg
@@ -117,7 +120,6 @@ class PlayerViewModel @Inject constructor(
     // =====================================================================
     // VOD PROGRESS
     // =====================================================================
-
     suspend fun getProgress(videoId: String): PlaybackProgressEntity? =
         vodRepository.getProgress(profileId(), serverId(), videoId)
 
@@ -147,7 +149,6 @@ class PlayerViewModel @Inject constructor(
             val cmd = next.cmd.ifEmpty { "/media/file_${next.id}.mpg" }
             val url = vodRepository.createStreamLink(cmd, "vod", next.episodeNumber).getOrDefault("")
             if (url.isEmpty()) return@launch
-
             playbackManager.currentEpisodeId = next.id
             playbackManager.currentEpisodeNumber = next.episodeNumber
             playbackManager.currentVideoId = next.id

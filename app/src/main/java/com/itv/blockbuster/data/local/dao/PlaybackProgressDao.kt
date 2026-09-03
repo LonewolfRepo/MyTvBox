@@ -9,12 +9,11 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface PlaybackProgressDao {
-
-    @Query("SELECT * FROM playback_progress WHERE profileId = :profileId AND serverId = :serverId AND videoId = :videoId ORDER BY timestamp DESC LIMIT 1")
-    suspend fun getProgress(profileId: Int, serverId: Int, videoId: String): PlaybackProgressEntity?
-
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun saveProgress(progress: PlaybackProgressEntity)
+
+    @Query("SELECT * FROM playback_progress WHERE profileId = :profileId AND serverId = :serverId AND videoId = :videoId LIMIT 1")
+    suspend fun getProgress(profileId: Int, serverId: Int, videoId: String): PlaybackProgressEntity?
 
     @Query("SELECT * FROM playback_progress WHERE profileId = :profileId AND serverId = :serverId AND movieId = :movieId")
     suspend fun getProgressForMovie(profileId: Int, serverId: Int, movieId: String): List<PlaybackProgressEntity>
@@ -24,4 +23,7 @@ interface PlaybackProgressDao {
 
     @Query("DELETE FROM playback_progress WHERE profileId = :profileId AND serverId = :serverId")
     suspend fun clearAll(profileId: Int, serverId: Int)
+
+    @Query("DELETE FROM playback_progress WHERE profileId = :profileId AND serverId = :serverId AND videoId = :videoId")
+    suspend fun deleteProgress(profileId: Int, serverId: Int, videoId: String)
 }

@@ -40,6 +40,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector   // ← ADD THIS LINE
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -68,7 +69,9 @@ fun PosterCard(
     isFavorite: Boolean = false,
     onClick: () -> Unit = {},
     onLongClick: () -> Unit = {},
-    onFavoriteIconClick: () -> Unit = {}
+    onFavoriteIconClick: () -> Unit = {},
+    actionIcon: ImageVector? = null,       // ADD THIS
+    actionIconTint: Color = Color.White    // ADD THIS
 ) {
     var focused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(
@@ -118,6 +121,25 @@ fun PosterCard(
             }
         }
 
+        if (actionIcon != null) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(6.dp)
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.6f))
+                    .focusable()
+                    .clickable(onClick = onFavoriteIconClick) // Reuses the click handler for D-pad
+            ) {
+                Icon(
+                    imageVector = actionIcon,
+                    contentDescription = "Action",
+                    tint = actionIconTint,
+                    modifier = Modifier.padding(6.dp)
+                )
+            }
+        }
         // Favorite Icon Overlay
         Box(
             modifier = Modifier

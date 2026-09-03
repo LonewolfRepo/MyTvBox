@@ -34,10 +34,29 @@ class PlaybackManager @Inject constructor(
     var currentEpisodeId: String = ""
     var currentEpisodeNumber: String = ""
     var currentVideoId: String = ""
+
+
     var episodeQueue: List<PortalVodItem> = emptyList()
 
     // Skip resume and play from beginning
     var restartFromBeginning: Boolean = false
+
+    var currentItemId: String = ""   // movieId for VOD/Series, channelId for Live
+    var currentItemType: String = ""   // "VOD", "SERIES", "LIVE"
+    var currentTitle: String = ""
+    var currentLogoUrl: String = ""
+    var currentContentType: String = "vod"
+    var currentChannelCmd: String = "" // For Live TV
+    var currentDescription: String = ""
+    var currentDirector: String = ""
+    var currentActors: String = ""
+    var currentYear: String = ""
+    var currentRatingImdb: String = ""
+    var currentRatingMpaa: String = ""
+    var currentAge: String = ""
+    var currentAddedDate: String = ""
+    var currentGenres: String = ""
+    var currentCountry: String = ""
 
     fun play(url: String) {
         val currentUrl = player.currentMediaItem?.mediaId
@@ -69,12 +88,6 @@ class PlaybackManager @Inject constructor(
     }
 
     fun clearVodContext() {
-        currentMovieId = ""
-        currentSeasonId = ""
-        currentSeasonNumber = ""
-        currentEpisodeId = ""
-        currentEpisodeNumber = ""
-        currentVideoId = ""
         episodeQueue = emptyList()
     }
 
