@@ -50,6 +50,22 @@ class VodRepository @Inject constructor(
         return portalService.createStreamLink(cmd, type, series)
     }
 
+    suspend fun getMovieFileId(movieId: String): Result<String> {
+        return portalService.getMovieFileId(movieId)
+    }
+
+    suspend fun getSeasons(movieId: String): Result<List<PortalVodItem>> {
+        return portalService.getSeasons(movieId)
+    }
+
+    suspend fun getEpisodes(movieId: String, seasonId: String): Result<List<PortalVodItem>> {
+        return portalService.getEpisodes(movieId, seasonId)
+    }
+
+    suspend fun getEpisodeFileId(movieId: String, seasonId: String, episodeId: String): Result<String> {
+        return portalService.getEpisodeFileId(movieId, seasonId, episodeId)
+    }
+
     fun getFavorites(profileId: Int, serverId: Int, type: String): Flow<List<FavoriteEntity>> =
         favoriteDao.getFavorites(profileId, serverId, type)
 
@@ -70,6 +86,8 @@ class VodRepository @Inject constructor(
             )
         )
     }
+
+
 
     suspend fun removeFavorite(profileId: Int, serverId: Int, itemId: String) =
         favoriteDao.removeFavorite(profileId, serverId, itemId)

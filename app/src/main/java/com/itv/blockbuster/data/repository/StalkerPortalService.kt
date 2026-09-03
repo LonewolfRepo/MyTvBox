@@ -413,4 +413,68 @@ class StalkerPortalService @Inject constructor(
             Result.failure(error)
         }
     }
+
+    suspend fun getMovieFileId(movieId: String): Result<String> {
+        return safe {
+            val url = buildLoadUrl("action=get_ordered_list&type=vod&movie_id=$movieId&p=1")
+            val response = api.getVodList(url)
+            val firstItem = response.js.data?.firstOrNull()
+                ?: throw IOException("No video file found for movie $movieId")
+            firstItem.id
+        }
+    }
+
+    suspend fun getSeasons(movieId: String): Result<List<PortalVodItem>> {
+        return safe {
+            val allSeasons = mutableListOf<PortalVodItem>()
+            var currentPage = 1
+            var totalItems = Int.MAX_VALUE
+
+            while (allSeasons.size < totalItems) {
+                val url = buildLoadUrl("action=get_ordered_list&type=vod&movie_id=$movieId&p=$currentPage")
+                val response = api.getVodList(url)
+
+                totalItems = response.js.totalItems.toIntOrNull() ?: 0
+                val items = response.js.data.orEmpty().map { it.toDomain("series") }
+                allSeasons.addAll(items)
+
+                if (items.isEmpty() || allSeasons.size >= totalItems) break
+                currentPage++
+            }
+
+            allSeasons
+        }
+    }
+
+    suspend fun getEpisodes(movieId: String, seasonId: String): Result<List<PortalVodItem>> {
+        return safe {
+            val allEpisodes = mutableListOf<PortalVodItem>()
+            var currentPage = 1
+            var totalItems = Int.MAX_VALUE
+
+            while (allEpisodes.size < totalItems) {
+                val url = buildLoadUrl("action=get_ordered_list&type=vod&movie_id=$movieId&season_id=$seasonId&p=$currentPage")
+                val response = api.getVodList(url)
+
+                totalItems = response.js.totalItems.toIntOrNull() ?: 0
+                val items = response.js.data.orEmpty().map { it.toDomain("series") }
+                allEpisodes.addAll(items)
+
+                if (items.isEmpty() || allEpisodes.size >= totalItems) break
+                currentPage++
+            }
+
+            allEpisodes
+        }
+    }
+
+    suspend fun getEpisodeFileId(movieId: String, seasonId: String, episodeId: String): Result<String> {
+        return safe {
+            val url = buildLoadUrl("action=get_ordered_list&type=vod&movie_id=$movieId&season_id=$seasonId&episode_id=$episodeId&p=1")
+            val response = api.getVodList(url)
+            val firstItem = response.js.data?.firstOrNull()
+                ?: throw IOException("No video file found for episode $episodeId")
+            firstItem.id
+        }
+    }
 }

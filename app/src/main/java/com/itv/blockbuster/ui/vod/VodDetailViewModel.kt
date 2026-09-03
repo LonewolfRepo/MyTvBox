@@ -80,39 +80,6 @@ class VodDetailViewModel @Inject constructor(
         }
     }
 
-    private fun loadSeasons(item: PortalVodItem) {
-        viewModelScope.launch {
-            // TODO: replace with real getMovieSeasons() once added to VodRepository
-            val seasons = listOf(
-                PortalVodItem(id = "${item.id}_s1", name = "Season 1", seasonNumber = "1", movieId = item.id, isSeries = true ),
-                PortalVodItem(id = "${item.id}_s2", name = "Season 2", seasonNumber = "2", movieId = item.id, isSeries = true )
-            )
-            _state.update {
-                it.copy(hasSeasons = true, seasons = seasons, selectedSeason = seasons.firstOrNull())
-            }
-            seasons.firstOrNull()?.let { season -> loadEpisodes(season) }
-        }
-    }
-
-    private fun loadEpisodes(season: PortalVodItem) {
-        viewModelScope.launch {
-            _state.update { it.copy(selectedSeason = season) }
-            // TODO: replace with real getSeasonEpisodes() once added to VodRepository
-            val episodes = (1..10).map {
-                PortalVodItem(
-                    id = "e${season.seasonNumber}_$it",
-                    name = "Episode $it",
-                    episodeNumber = it.toString(),
-                    seasonNumber = season.seasonNumber,
-                    movieId = season.movieId,
-                    isSeries = true
-                )
-            }
-            _state.update { it.copy(episodes = episodes) }
-            loadEpisodesProgress(season.movieId)
-        }
-    }
-
     private fun loadEpisodesProgress(movieId: String) {
         viewModelScope.launch {
             val profileId = prefs.activeProfileIdFlow.first()
@@ -130,35 +97,138 @@ class VodDetailViewModel @Inject constructor(
     fun playMovie(onPlay: (String) -> Unit) {
         val item = _state.value.item ?: return
         viewModelScope.launch {
-            playbackManager.clearLiveContext()
-            playbackManager.currentMovieId = item.movieId.ifEmpty { item.id }
-            playbackManager.currentSeasonId = ""
-            playbackManager.currentSeasonNumber = ""
-            playbackManager.currentEpisodeId = ""
-            playbackManager.currentEpisodeNumber = ""
-            playbackManager.currentVideoId = item.id
+            _state.update { it.copy(isLoading = true) }
 
-            val cmd = item.cmd.ifEmpty { "/media/file_${item.id}.mpg" }
-            val url = vodRepository.createStreamLink(cmd, "vod").getOrDefault("")
-            if (url.isNotEmpty()) onPlay(url)
+            try {
+                // Step 1: Get the actual video file ID
+                val fileIdResult = vodRepository.getMovieFileId(item.id)
+                if (fileIdResult.isFailure) {
+                    _state.update { it.copy(isLoading = false) }
+                    return@launch
+                }
+                val fileId = fileIdResult.getOrThrow()
+
+                // Step 2: Construct the stream command
+                val cmd = "/media/file_$fileId.mpg"
+
+                // Step 3: Create the stream link
+                val urlResult = vodRepository.createStreamLink(cmd, "vod")
+                if (urlResult.isFailure) {
+                    _state.update { it.copy(isLoading = false) }
+                    return@launch
+                }
+                val url = urlResult.getOrThrow()
+
+                _state.update { it.copy(isLoading = false) }
+
+                // Step 4: Play the stream
+                if (url.isNotEmpty()) {
+                    onPlay(url)
+                }
+            } catch (e: Exception) {
+                _state.update { it.copy(isLoading = false) }
+            }
+        }
+    }
+
+    private fun loadSeasons(item: PortalVodItem) {
+        viewModelScope.launch {
+            _state.update { it.copy(isLoading = true) }
+
+            try {
+                val seasonsResult = vodRepository.getSeasons(item.id)
+                if (seasonsResult.isFailure) {
+                    _state.update { it.copy(isLoading = false) }
+                    return@launch
+                }
+
+                val seasons = seasonsResult.getOrDefault(emptyList())
+                _state.update {
+                    it.copy(
+                        hasSeasons = true,
+                        seasons = seasons,
+                        selectedSeason = seasons.firstOrNull(),
+                        isLoading = false
+                    )
+                }
+
+                // Load episodes for the first season
+                seasons.firstOrNull()?.let { season -> loadEpisodes(season) }
+            } catch (e: Exception) {
+                _state.update { it.copy(isLoading = false) }
+            }
+        }
+    }
+
+    private fun loadEpisodes(season: PortalVodItem) {
+        viewModelScope.launch {
+            _state.update { it.copy(selectedSeason = season, isLoading = true) }
+
+            try {
+                // FIX: Use season.id instead of season.seasonId
+                val episodesResult = vodRepository.getEpisodes(
+                    movieId = season.movieId,
+                    seasonId = season.id  // CHANGED from season.seasonId
+                )
+
+                if (episodesResult.isFailure) {
+                    _state.update { it.copy(isLoading = false) }
+                    return@launch
+                }
+
+                val episodes = episodesResult.getOrDefault(emptyList())
+                _state.update {
+                    it.copy(
+                        episodes = episodes,
+                        isLoading = false
+                    )
+                }
+
+                loadEpisodesProgress(season.movieId)
+            } catch (e: Exception) {
+                _state.update { it.copy(isLoading = false) }
+            }
         }
     }
 
     fun playEpisode(episode: PortalVodItem, onPlay: (String) -> Unit) {
         val item = _state.value.item ?: return
-        val season = _state.value.selectedSeason
-        viewModelScope.launch {
-            playbackManager.clearLiveContext()
-            playbackManager.currentMovieId = item.id
-            playbackManager.currentSeasonId = season?.id ?: ""
-            playbackManager.currentSeasonNumber = season?.seasonNumber ?: ""
-            playbackManager.currentEpisodeId = episode.id
-            playbackManager.currentEpisodeNumber = episode.episodeNumber
-            playbackManager.currentVideoId = episode.id
+        val season = _state.value.selectedSeason ?: return
 
-            val cmd = episode.cmd.ifEmpty { "/media/file_${episode.id}.mpg" }
-            val url = vodRepository.createStreamLink(cmd, "vod", episode.episodeNumber).getOrDefault("")
-            if (url.isNotEmpty()) onPlay(url)
+        viewModelScope.launch {
+            _state.update { it.copy(isLoading = true) }
+
+            try {
+                // FIX: Use season.id for seasonId, and episode.id for episodeId
+                val fileIdResult = vodRepository.getEpisodeFileId(
+                    movieId = item.id,
+                    seasonId = season.id,      // CHANGED from season.seasonId
+                    episodeId = episode.id     // CHANGED from episode.episodeId
+                )
+
+                if (fileIdResult.isFailure) {
+                    _state.update { it.copy(isLoading = false) }
+                    return@launch
+                }
+                val fileId = fileIdResult.getOrThrow()
+
+                val cmd = "/media/file_$fileId.mpg"
+
+                val urlResult = vodRepository.createStreamLink(cmd, "vod")
+                if (urlResult.isFailure) {
+                    _state.update { it.copy(isLoading = false) }
+                    return@launch
+                }
+                val url = urlResult.getOrThrow()
+
+                _state.update { it.copy(isLoading = false) }
+
+                if (url.isNotEmpty()) {
+                    onPlay(url)
+                }
+            } catch (e: Exception) {
+                _state.update { it.copy(isLoading = false) }
+            }
         }
     }
 
