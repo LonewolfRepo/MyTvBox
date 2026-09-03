@@ -122,7 +122,7 @@ class SettingsViewModel @Inject constructor(
 
             // Only fetch from server if cache is empty
             if (cachedVodCats.isEmpty()) {
-                cachedVodCats = vodRepository.getCategories("vod").getOrDefault(emptyList())
+                cachedVodCats = vodRepository.getCategories().getOrDefault(emptyList())
             }
             if (cachedLiveCats.isEmpty()) {
                 cachedLiveCats = liveTvRepository.getCategories().getOrDefault(emptyList())

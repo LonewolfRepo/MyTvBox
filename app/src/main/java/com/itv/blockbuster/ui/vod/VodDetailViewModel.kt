@@ -84,8 +84,8 @@ class VodDetailViewModel @Inject constructor(
         viewModelScope.launch {
             // TODO: replace with real getMovieSeasons() once added to VodRepository
             val seasons = listOf(
-                PortalVodItem(id = "${item.id}_s1", name = "Season 1", seasonNumber = "1", movieId = item.id),
-                PortalVodItem(id = "${item.id}_s2", name = "Season 2", seasonNumber = "2", movieId = item.id)
+                PortalVodItem(id = "${item.id}_s1", name = "Season 1", seasonNumber = "1", movieId = item.id, isSeries = true ),
+                PortalVodItem(id = "${item.id}_s2", name = "Season 2", seasonNumber = "2", movieId = item.id, isSeries = true )
             )
             _state.update {
                 it.copy(hasSeasons = true, seasons = seasons, selectedSeason = seasons.firstOrNull())
@@ -104,7 +104,8 @@ class VodDetailViewModel @Inject constructor(
                     name = "Episode $it",
                     episodeNumber = it.toString(),
                     seasonNumber = season.seasonNumber,
-                    movieId = season.movieId
+                    movieId = season.movieId,
+                    isSeries = true
                 )
             }
             _state.update { it.copy(episodes = episodes) }

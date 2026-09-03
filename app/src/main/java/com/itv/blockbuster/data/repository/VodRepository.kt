@@ -20,30 +20,27 @@ class VodRepository @Inject constructor(
     private val progressDao: PlaybackProgressDao
 ) {
 
-    // Always fetch "vod" categories - filtering happens client-side
     suspend fun getCategories(): Result<List<PortalCategory>> {
         return portalService.fetchVodCategories()
     }
 
-    // FIX: Fetch all items with type=vod, then filter by isSeries attribute
     suspend fun getList(contentType: String, categoryId: String, page: Int, pageSize: Int = 20): Result<PortalPage<PortalVodItem>> {
         val result = portalService.fetchVodList(categoryId, page, pageSize)
-        return result.map { page ->
+        return result.map { vodPage ->
             val filteredItems = when (contentType) {
-                "series" -> page.items.filter { it.isSeries } // TV Shows only
-                else -> page.items.filter { !it.isSeries }     // Movies only (is_series = false/0/absent)
+                "series" -> vodPage.items.filter { item -> item.isSeries }
+                else -> vodPage.items.filter { item -> !item.isSeries }
             }
             PortalPage(filteredItems, filteredItems.size)
         }
     }
 
-    // FIX: Search also filters by isSeries
     suspend fun search(contentType: String, query: String, categoryId: String, page: Int): Result<PortalPage<PortalVodItem>> {
         val result = portalService.fetchVodSearch(query, categoryId, page)
-        return result.map { page ->
+        return result.map { vodPage ->
             val filteredItems = when (contentType) {
-                "series" -> page.items.filter { it.isSeries }
-                else -> page.items.filter { !it.isSeries }
+                "series" -> vodPage.items.filter { item -> item.isSeries }
+                else -> vodPage.items.filter { item -> !item.isSeries }
             }
             PortalPage(filteredItems, filteredItems.size)
         }
@@ -53,7 +50,6 @@ class VodRepository @Inject constructor(
         return portalService.createStreamLink(cmd, type, series)
     }
 
-    // ── Favorites ──
     fun getFavorites(profileId: Int, serverId: Int, type: String): Flow<List<FavoriteEntity>> =
         favoriteDao.getFavorites(profileId, serverId, type)
 
@@ -78,7 +74,6 @@ class VodRepository @Inject constructor(
     suspend fun removeFavorite(profileId: Int, serverId: Int, itemId: String) =
         favoriteDao.removeFavorite(profileId, serverId, itemId)
 
-    // ── Progress ──
     suspend fun getProgress(profileId: Int, serverId: Int, videoId: String): PlaybackProgressEntity? =
         progressDao.getProgress(profileId, serverId, videoId)
 
