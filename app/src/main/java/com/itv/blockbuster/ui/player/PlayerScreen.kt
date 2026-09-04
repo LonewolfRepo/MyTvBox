@@ -30,7 +30,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -101,22 +100,20 @@ fun PlayerScreen(
     onBack: () -> Unit,
     viewModel: PlayerViewModel = hiltViewModel()
 ) {
+
     val playbackManager = viewModel.playbackManager
     val player = playbackManager.player
     val isLive = channelId != "none"
-    val focusRequester = remember { FocusRequester() }
 
+    val focusRequester = remember { FocusRequester() }
     var playerViewRef by remember { mutableStateOf<PlayerView?>(null) }
     var bannerVisible by remember { mutableStateOf(false) }
     val banner by viewModel.liveBanner.collectAsState()
+    var resumeProgress by remember { mutableStateOf<PlaybackProgressEntity?>(null) }
     var countdown by remember { mutableStateOf<Int?>(null) }
     var ended by remember { mutableStateOf(false) }
     val autoPlayNext by viewModel.autoPlayNext.collectAsState()
 
-    // FIX: Pending seek position — applied once player reaches STATE_READY
-    var pendingSeekMs by remember { mutableLongStateOf(-1L) }
-
-    // Settings-driven seek intervals
     val rewindMs by viewModel.rewindMs.collectAsState()
     val forwardMs by viewModel.forwardMs.collectAsState()
 
@@ -141,19 +138,22 @@ fun PlayerScreen(
         }
     }
 
-    // VOD: auto-resume — defer seek until player is STATE_READY
+    // VOD: resume prompt
+    // FIX: Use playbackManager.currentVideoId instead of navigation videoId param.
+    // The navigation route passes "none" as videoId, so we must use the
+    // PlaybackManager value which was set by VodDetailViewModel before navigation.
     LaunchedEffect(videoId) {
-        if (!isLive && videoId != "none" && !playbackManager.restartFromBeginning) {
-            // FIX: Use playbackManager.currentVideoId (set by VodDetailViewModel
-            // before navigation) so the lookup matches what was saved
-            val lookupId = playbackManager.currentVideoId.ifEmpty { videoId }
-            val progress = viewModel.getProgress(lookupId)
-            if (progress != null &&
-                progress.positionMs > 5000 &&
-                !PlayerHelpers.isNearlyFinished(progress.positionMs, progress.durationMs)
-            ) {
-                // Defer seek until player fires STATE_READY
-                pendingSeekMs = progress.positionMs
+        if (!isLive && !playbackManager.restartFromBeginning) {
+            val actualVideoId = playbackManager.currentVideoId
+            if (actualVideoId.isNotEmpty()) {
+                val progress = viewModel.getProgress(actualVideoId)
+                if (progress != null &&
+                    progress.positionMs > 5000 &&
+                    !PlayerHelpers.isNearlyFinished(progress.positionMs, progress.durationMs)
+                ) {
+                    player.pause()
+                    resumeProgress = progress
+                }
             }
         }
         playbackManager.restartFromBeginning = false
@@ -169,13 +169,6 @@ fun PlayerScreen(
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
                 ended = (state == Player.STATE_ENDED)
-
-                // FIX: Perform pending seek once the player is fully loaded
-                if (state == Player.STATE_READY && pendingSeekMs >= 0) {
-                    player.seekTo(pendingSeekMs)
-                    player.play()
-                    pendingSeekMs = -1L
-                }
             }
         }
         player.addListener(listener)
@@ -223,14 +216,12 @@ fun PlayerScreen(
             .onPreviewKeyEvent { event: KeyEvent ->
                 if (event.type == KeyEventType.KeyDown) {
                     when (event.key) {
-                        // LIVE: UP/DOWN = channel zapping
                         Key.DirectionUp -> {
                             if (isLive) { viewModel.zap(-1); bannerVisible = true; true } else false
                         }
                         Key.DirectionDown -> {
                             if (isLive) { viewModel.zap(1); bannerVisible = true; true } else false
                         }
-                        // VOD: LEFT/RIGHT = seek using settings intervals
                         Key.DirectionLeft -> {
                             if (!isLive) {
                                 player.seekTo((player.currentPosition - rewindMs).coerceAtLeast(0))
@@ -243,7 +234,6 @@ fun PlayerScreen(
                                 true
                             } else { bannerVisible = true; true }
                         }
-                        // CENTER: banner (live) or play/pause (VOD)
                         Key.DirectionCenter, Key.Enter, Key.MediaPlayPause -> {
                             if (isLive) {
                                 bannerVisible = !bannerVisible
@@ -284,6 +274,28 @@ fun PlayerScreen(
             LiveBannerOverlay(
                 banner = banner!!,
                 modifier = Modifier.align(Alignment.TopCenter)
+            )
+        }
+
+
+        // ── RESUME DIALOG (VOD) ──
+        resumeProgress?.let { progress ->
+            ResumeDialog(
+                progress = progress,
+                onResume = {
+                    player.seekTo(progress.positionMs)
+                    player.play()
+                    resumeProgress = null
+                },
+                onStartOver = {
+                    player.seekTo(0)
+                    player.play()
+                    resumeProgress = null
+                },
+                onDismiss = {
+                    player.play()
+                    resumeProgress = null
+                }
             )
         }
 
@@ -378,9 +390,7 @@ private fun LiveBannerOverlay(
                 )
             }
         }
-
         Spacer(Modifier.width(16.dp))
-
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 banner.channel.name,
@@ -400,7 +410,6 @@ private fun LiveBannerOverlay(
                 )
             }
         }
-
         if (banner.next != null) {
             Column(horizontalAlignment = Alignment.End) {
                 Text("Next:", color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp)
@@ -414,10 +423,47 @@ private fun LiveBannerOverlay(
             }
             Spacer(Modifier.width(16.dp))
         }
-
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(Icons.Default.KeyboardArrowUp, "Channel up", tint = BbAccent, modifier = Modifier.size(20.dp))
             Icon(Icons.Default.KeyboardArrowDown, "Channel down", tint = BbAccent, modifier = Modifier.size(20.dp))
         }
     }
+}
+
+// =====================================================================
+// RESUME DIALOG (VOD)
+// =====================================================================
+
+@Composable
+private fun ResumeDialog(
+    progress: PlaybackProgressEntity,
+    onResume: () -> Unit,
+    onStartOver: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = BbSurface,
+        title = { Text("Resume playback?", color = BbTextPrimary) },
+        text = {
+            Text(
+                "You stopped at ${PlayerHelpers.formatTime(progress.positionMs)}. " +
+                        "Resume from there or start from the beginning?",
+                color = BbTextSecondary
+            )
+        },
+        confirmButton = {
+            Button(
+                onClick = onResume,
+                colors = ButtonDefaults.buttonColors(containerColor = BbAccent)
+            ) {
+                Text("Resume from ${PlayerHelpers.formatTime(progress.positionMs)}")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onStartOver) {
+                Text("Play from beginning", color = BbTextSecondary)
+            }
+        }
+    )
 }
