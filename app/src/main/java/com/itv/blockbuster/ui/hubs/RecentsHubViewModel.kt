@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.itv.blockbuster.data.local.UserPreferencesRepository
 import com.itv.blockbuster.data.local.entity.RecentEntity
 import com.itv.blockbuster.data.repository.LiveTvRepository
+import com.itv.blockbuster.data.repository.VodRepository
 import com.itv.blockbuster.data.repository.RecentRepository
 import com.itv.blockbuster.data.session.StalkerSessionManager
 import com.itv.blockbuster.domain.model.PortalChannel
@@ -24,7 +25,8 @@ class RecentsHubViewModel @Inject constructor(
     private val recentRepository: RecentRepository,
     private val prefs: UserPreferencesRepository,
     private val session: StalkerSessionManager,
-    private val liveTvRepository: LiveTvRepository
+    private val liveTvRepository: LiveTvRepository,
+    private val vodRepository: VodRepository
 ) : ViewModel() {
 
     private val _favoriteIds = MutableStateFlow<Set<String>>(emptySet())
@@ -111,6 +113,14 @@ class RecentsHubViewModel @Inject constructor(
         viewModelScope.launch {
             val url = liveTvRepository.createStreamLink(cmd).getOrDefault("")
             if (url.isNotEmpty()) onUrl(url)
+        }
+    }
+
+    fun toggleFavorite(item: PortalVodItem) {
+        viewModelScope.launch {
+            val p = prefs.activeProfileIdFlow.first()
+            val s = session.activePortal.value?.serverId ?: 0
+            vodRepository.toggleFavorite(p, s, item, item.contentType)
         }
     }
 }

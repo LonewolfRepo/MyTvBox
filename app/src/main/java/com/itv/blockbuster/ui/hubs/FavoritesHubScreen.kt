@@ -44,6 +44,8 @@ import com.itv.blockbuster.data.local.UserPreferencesRepository
 import com.itv.blockbuster.data.local.dao.FavoriteDao
 import com.itv.blockbuster.data.repository.LiveTvRepository
 import com.itv.blockbuster.data.session.StalkerSessionManager
+import com.itv.blockbuster.ui.navigation.FormFactor
+import com.itv.blockbuster.ui.navigation.rememberFormFactor
 import com.itv.blockbuster.ui.theme.BbBackground
 import com.itv.blockbuster.ui.theme.BbDestructive
 import com.itv.blockbuster.ui.theme.BbTextMuted
@@ -69,7 +71,7 @@ data class HubUiState(
 @Composable
 fun FavoritesHubScreen(
     onPlayLive: (String, String) -> Unit,
-    onOpenVod: (String, String) -> Unit, // FIXED: Restored (String, String) to match navigation graph and pass contentType
+    onOpenVod: (String, String) -> Unit,
     viewModel: FavoritesHubViewModel = hiltViewModel()
 ) {
     val movieItems by viewModel.movieItems.collectAsState()
@@ -127,6 +129,7 @@ fun FavoritesHubScreen(
                         }
                     }
                 }
+
                 // Movies carousel
                 if (movieItems.isNotEmpty()) {
                     item {
@@ -149,7 +152,8 @@ fun FavoritesHubScreen(
                                     isFavorite = favoriteIds.contains(item.id),
                                     onClick = {
                                         VodNavigationCache.currentItem = item
-                                        onOpenVod(item.id, item.contentType) // FIXED: Pass contentType
+                                        val type = item.contentType.ifEmpty { if (item.isSeries) "series" else "vod" }
+                                        onOpenVod(item.id, type)
                                     },
                                     onLongClick = { viewModel.toggleFavorite(item) },
                                     onFavoriteIconClick = { viewModel.toggleFavorite(item) }
@@ -158,6 +162,7 @@ fun FavoritesHubScreen(
                         }
                     }
                 }
+
                 // TV Shows carousel
                 if (seriesItems.isNotEmpty()) {
                     item {
@@ -180,7 +185,8 @@ fun FavoritesHubScreen(
                                     isFavorite = favoriteIds.contains(item.id),
                                     onClick = {
                                         VodNavigationCache.currentItem = item
-                                        onOpenVod(item.id, item.contentType) // FIXED: Pass contentType
+                                        val type = item.contentType.ifEmpty { "series" }
+                                        onOpenVod(item.id, type)
                                     },
                                     onLongClick = { viewModel.toggleFavorite(item) },
                                     onFavoriteIconClick = { viewModel.toggleFavorite(item) }
@@ -232,7 +238,6 @@ fun UnifiedHubScreen(
                 item { Box(Modifier.padding(32.dp)) }
             }
         }
-
         IconButton(
             onClick = onClearAll,
             modifier = Modifier.align(Alignment.TopEnd).padding(16.dp)

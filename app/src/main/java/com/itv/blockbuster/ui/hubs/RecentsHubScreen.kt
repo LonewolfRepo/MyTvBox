@@ -16,7 +16,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -34,6 +38,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.itv.blockbuster.domain.model.PortalChannel
+import com.itv.blockbuster.domain.model.PortalVodItem
 import com.itv.blockbuster.ui.components.ChannelTile
 import com.itv.blockbuster.ui.components.PosterCard
 import com.itv.blockbuster.ui.theme.BbBackground
@@ -42,6 +48,11 @@ import com.itv.blockbuster.ui.theme.BbTextMuted
 import com.itv.blockbuster.ui.theme.BbTextPrimary
 import com.itv.blockbuster.ui.theme.BbTextSecondary
 import com.itv.blockbuster.util.VodNavigationCache
+
+private sealed class MenuTarget {
+    data class Vod(val item: PortalVodItem) : MenuTarget()
+    data class Live(val channel: PortalChannel) : MenuTarget()
+}
 
 @Composable
 fun RecentsHubScreen(
@@ -54,6 +65,7 @@ fun RecentsHubScreen(
     val liveChannels by viewModel.liveChannels.collectAsState()
     val favoriteIds by viewModel.favoriteIds.collectAsState()
     var showClearDialog by remember { mutableStateOf(false) }
+    var menuTarget by remember { mutableStateOf<MenuTarget?>(null) }
 
     Box(modifier = Modifier.fillMaxSize().background(BbBackground)) {
         if (movieItems.isEmpty() && seriesItems.isEmpty() && liveChannels.isEmpty()) {
@@ -78,13 +90,43 @@ fun RecentsHubScreen(
                     item {
                         LazyRow(contentPadding = PaddingValues(horizontal = 24.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             items(liveChannels, key = { it.id }) { channel ->
-                                ChannelTile(
-                                    channel = channel,
-                                    isFavorite = favoriteIds.contains(channel.id),
-                                    onClick = { viewModel.getStreamUrl(channel.cmd) { url -> if (url.isNotEmpty()) onPlayLive(url, channel.id) } },
-                                    onLongClick = { viewModel.deleteLiveRecent(channel.id) },
-                                    onFavoriteIconClick = { viewModel.toggleLiveFavorite(channel) }
-                                )
+                                Box {
+                                    ChannelTile(
+                                        channel = channel,
+                                        isFavorite = favoriteIds.contains(channel.id),
+                                        onClick = { viewModel.getStreamUrl(channel.cmd) { url -> if (url.isNotEmpty()) onPlayLive(url, channel.id) } },
+                                        onLongClick = { menuTarget = MenuTarget.Live(channel) },
+                                        onFavoriteIconClick = { viewModel.toggleLiveFavorite(channel) }
+                                    )
+                                    DropdownMenu(
+                                        expanded = menuTarget is MenuTarget.Live && (menuTarget as MenuTarget.Live).channel.id == channel.id,
+                                        onDismissRequest = { menuTarget = null }
+                                    ) {
+                                        DropdownMenuItem(
+                                            text = { Text(if (favoriteIds.contains(channel.id)) "Remove from Favorites" else "Add to Favorites") },
+                                            onClick = {
+                                                viewModel.toggleLiveFavorite(channel)
+                                                menuTarget = null
+                                            },
+                                            leadingIcon = {
+                                                Icon(
+                                                    if (favoriteIds.contains(channel.id)) Icons.Default.StarBorder else Icons.Default.Star,
+                                                    contentDescription = null
+                                                )
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Delete from Recent") },
+                                            onClick = {
+                                                viewModel.deleteLiveRecent(channel.id)
+                                                menuTarget = null
+                                            },
+                                            leadingIcon = {
+                                                Icon(Icons.Default.Delete, contentDescription = null, tint = BbDestructive)
+                                            }
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -94,13 +136,45 @@ fun RecentsHubScreen(
                     item {
                         LazyRow(contentPadding = PaddingValues(horizontal = 24.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             items(movieItems, key = { it.id }) { item ->
-                                PosterCard(
-                                    item = item,
-                                    isFavorite = false,
-                                    onClick = { VodNavigationCache.currentItem = item; onOpenVod(item.id, item.contentType) },
-                                    onLongClick = { viewModel.deleteRecent(item) },
-                                    onFavoriteIconClick = { viewModel.deleteRecent(item) }
-                                )
+                                Box {
+                                    PosterCard(
+                                        item = item,
+                                        isFavorite = favoriteIds.contains(item.id),
+                                        onClick = { VodNavigationCache.currentItem = item;
+                                            val type = item.contentType.ifEmpty { if (item.isSeries) "series" else "vod" }
+                                            onOpenVod(item.id, type) },
+                                        onLongClick = { menuTarget = MenuTarget.Vod(item) },
+                                        onFavoriteIconClick = { viewModel.toggleFavorite(item) }
+                                    )
+                                    DropdownMenu(
+                                        expanded = menuTarget is MenuTarget.Vod && (menuTarget as MenuTarget.Vod).item.id == item.id,
+                                        onDismissRequest = { menuTarget = null }
+                                    ) {
+                                        DropdownMenuItem(
+                                            text = { Text(if (favoriteIds.contains(item.id)) "Remove from Favorites" else "Add to Favorites") },
+                                            onClick = {
+                                                viewModel.toggleFavorite(item)
+                                                menuTarget = null
+                                            },
+                                            leadingIcon = {
+                                                Icon(
+                                                    if (favoriteIds.contains(item.id)) Icons.Default.StarBorder else Icons.Default.Star,
+                                                    contentDescription = null
+                                                )
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Delete from Recent") },
+                                            onClick = {
+                                                viewModel.deleteRecent(item)
+                                                menuTarget = null
+                                            },
+                                            leadingIcon = {
+                                                Icon(Icons.Default.Delete, contentDescription = null, tint = BbDestructive)
+                                            }
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -110,13 +184,45 @@ fun RecentsHubScreen(
                     item {
                         LazyRow(contentPadding = PaddingValues(horizontal = 24.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             items(seriesItems, key = { it.id }) { item ->
-                                PosterCard(
-                                    item = item,
-                                    isFavorite = false,
-                                    onClick = { VodNavigationCache.currentItem = item; onOpenVod(item.id, item.contentType) },
-                                    onLongClick = { viewModel.deleteRecent(item) },
-                                    onFavoriteIconClick = { viewModel.deleteRecent(item) }
-                                )
+                                Box {
+                                    PosterCard(
+                                        item = item,
+                                        isFavorite = favoriteIds.contains(item.id),
+                                        onClick = { VodNavigationCache.currentItem = item;
+                                            val type = item.contentType.ifEmpty { if (item.isSeries) "series" else "vod" }
+                                            onOpenVod(item.id, type) },
+                                        onLongClick = { menuTarget = MenuTarget.Vod(item) },
+                                        onFavoriteIconClick = { viewModel.toggleFavorite(item) }
+                                    )
+                                    DropdownMenu(
+                                        expanded = menuTarget is MenuTarget.Vod && (menuTarget as MenuTarget.Vod).item.id == item.id,
+                                        onDismissRequest = { menuTarget = null }
+                                    ) {
+                                        DropdownMenuItem(
+                                            text = { Text(if (favoriteIds.contains(item.id)) "Remove from Favorites" else "Add to Favorites") },
+                                            onClick = {
+                                                viewModel.toggleFavorite(item)
+                                                menuTarget = null
+                                            },
+                                            leadingIcon = {
+                                                Icon(
+                                                    if (favoriteIds.contains(item.id)) Icons.Default.StarBorder else Icons.Default.Star,
+                                                    contentDescription = null
+                                                )
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Delete from Recent") },
+                                            onClick = {
+                                                viewModel.deleteRecent(item)
+                                                menuTarget = null
+                                            },
+                                            leadingIcon = {
+                                                Icon(Icons.Default.Delete, contentDescription = null, tint = BbDestructive)
+                                            }
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -124,14 +230,12 @@ fun RecentsHubScreen(
                 item { Spacer(Modifier.height(32.dp)) }
             }
         }
-
         IconButton(
             onClick = { showClearDialog = true },
             modifier = Modifier.align(Alignment.TopEnd).padding(16.dp)
         ) {
             Icon(Icons.Default.Delete, "Clear all", tint = BbDestructive)
         }
-
         if (showClearDialog) {
             AlertDialog(
                 onDismissRequest = { showClearDialog = false },
