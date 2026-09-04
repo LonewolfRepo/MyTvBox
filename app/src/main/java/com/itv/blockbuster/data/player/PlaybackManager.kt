@@ -85,6 +85,12 @@ class PlaybackManager @Inject constructor(
     }
 
     fun clearVodContext() {
+        currentMovieId = ""
+        currentSeasonId = ""
+        currentSeasonNumber = ""
+        currentEpisodeId = ""
+        currentEpisodeNumber = ""
+        currentVideoId = ""
         episodeQueue = emptyList()
     }
 

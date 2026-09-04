@@ -3,6 +3,7 @@ package com.itv.blockbuster.ui.hubs
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.itv.blockbuster.data.local.UserPreferencesRepository
+import com.itv.blockbuster.data.local.entity.PlaybackProgressEntity
 import com.itv.blockbuster.data.local.entity.RecentEntity
 import com.itv.blockbuster.data.repository.LiveTvRepository
 import com.itv.blockbuster.data.repository.VodRepository
@@ -31,6 +32,9 @@ class RecentsHubViewModel @Inject constructor(
 
     private val _favoriteIds = MutableStateFlow<Set<String>>(emptySet())
     val favoriteIds: StateFlow<Set<String>> = _favoriteIds.asStateFlow()
+
+    private val _progressMap = MutableStateFlow<Map<String, PlaybackProgressEntity>>(emptyMap())
+    val progressMap: StateFlow<Map<String, PlaybackProgressEntity>> = _progressMap.asStateFlow()
 
     private val _liveChannels = MutableStateFlow<List<PortalChannel>>(emptyList())
     val liveChannels: StateFlow<List<PortalChannel>> = _liveChannels.asStateFlow()
@@ -64,6 +68,16 @@ class RecentsHubViewModel @Inject constructor(
                 _liveChannels.value = recents.filter { it.type == "LIVE" }.map { it.toChannel() }
                 _movieItems.value = recents.filter { it.type == "VOD" }.map { it.toPortalItem() }
                 _seriesItems.value = recents.filter { it.type == "SERIES" }.map { it.toPortalItem() }
+            }
+        }
+
+        viewModelScope.launch {
+            combine(prefs.activeProfileIdFlow, session.activePortal) { p, sp ->
+                Pair(p, sp?.serverId ?: 0)
+            }.flatMapLatest { (p, s) ->
+                vodRepository.getRecentProgress(p, s)
+            }.collect { list ->
+                _progressMap.value = list.associateBy { it.videoId }
             }
         }
     }

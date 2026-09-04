@@ -56,7 +56,8 @@ fun VodBrowserScreen(
     viewModel: VodBrowserViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
-    val favoriteIds by viewModel.favoriteIds.collectAsState()   // ADD
+    val favoriteIds by viewModel.favoriteIds.collectAsState()
+    val progressMap by viewModel.progressMap.collectAsState() // ADD
     // Initialize the ViewModel with the correct content type
     LaunchedEffect(contentType) {
         viewModel.initialize(contentType)
@@ -91,6 +92,7 @@ fun VodBrowserScreen(
                     items(state.rows, key = { it.id }) { row ->
                         CarouselRow(
                             row = row,
+                            progressMap = progressMap,
                             favoriteIds = favoriteIds,                      // ADD
                             onItemClick = { item ->
                                 VodNavigationCache.currentItem = item

@@ -45,6 +45,7 @@ fun HomeScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
     val favoriteIds by viewModel.favoriteIds.collectAsState()
+    val progressMap by viewModel.progressMap.collectAsState()
 
     Box(modifier = Modifier.fillMaxSize().background(BbBackground)) {
         when {
@@ -61,8 +62,8 @@ fun HomeScreen(
                     CarouselRow(
                         row = row,
                         favoriteIds = favoriteIds,
+                        progressMap = progressMap,
                         onItemClick = { item ->
-                            // Cache item + route by isSeries (contentType from API is always "vod")
                             VodNavigationCache.currentItem = item
                             onOpenVodDetail(item.id, if (item.isSeries) "series" else "vod")
                         },

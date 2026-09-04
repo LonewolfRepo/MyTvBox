@@ -78,6 +78,8 @@ fun FavoritesHubScreen(
     val seriesItems by viewModel.seriesItems.collectAsState()
     val liveChannels by viewModel.liveChannels.collectAsState()
     val favoriteIds by viewModel.favoriteIds.collectAsState()
+    val progressMap by viewModel.progressMap.collectAsState()
+
 
     Box(modifier = Modifier.fillMaxSize().background(BbBackground)) {
         if (movieItems.isEmpty() && seriesItems.isEmpty() && liveChannels.isEmpty()) {
@@ -116,6 +118,7 @@ fun FavoritesHubScreen(
                             items(liveChannels, key = { it.id }) { channel ->
                                 ChannelTile(
                                     channel = channel,
+
                                     isFavorite = favoriteIds.contains(channel.id),
                                     onClick = {
                                         viewModel.getStreamUrl(channel.cmd) { url ->
@@ -142,14 +145,18 @@ fun FavoritesHubScreen(
                         )
                     }
                     item {
-                        LazyRow(
-                            contentPadding = PaddingValues(horizontal = 24.dp),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
+                        LazyRow(contentPadding = PaddingValues(horizontal = 24.dp), horizontalArrangement = Arrangement.spacedBy(12.dp))
+
+                         {
                             items(movieItems, key = { it.id }) { item ->
+                                val progress = progressMap[item.id]
+                                val ratio = if (progress != null && progress.durationMs > 0) {
+                                    (progress.positionMs.toFloat() / progress.durationMs.toFloat()).coerceIn(0f, 1f)
+                                }  else 0f
                                 PosterCard(
                                     item = item,
                                     isFavorite = favoriteIds.contains(item.id),
+                                    progressRatio = ratio, // NEW
                                     onClick = {
                                         VodNavigationCache.currentItem = item
                                         val type = item.contentType.ifEmpty { if (item.isSeries) "series" else "vod" }
@@ -180,9 +187,14 @@ fun FavoritesHubScreen(
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             items(seriesItems, key = { it.id }) { item ->
+                                val progress = progressMap[item.id]
+                                val ratio = if (progress != null && progress.durationMs > 0) {
+                                    (progress.positionMs.toFloat() / progress.durationMs.toFloat()).coerceIn(0f, 1f)
+                                } else 0f
                                 PosterCard(
                                     item = item,
                                     isFavorite = favoriteIds.contains(item.id),
+                                    progressRatio = ratio, // NEW
                                     onClick = {
                                         VodNavigationCache.currentItem = item
                                         val type = item.contentType.ifEmpty { "series" }

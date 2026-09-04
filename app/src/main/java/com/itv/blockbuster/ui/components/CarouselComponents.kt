@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -40,13 +41,15 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.vector.ImageVector   // ← ADD THIS LINE
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import coil.compose.AsyncImage
+import com.itv.blockbuster.data.local.entity.PlaybackProgressEntity
 import com.itv.blockbuster.domain.model.PortalVodItem
 import com.itv.blockbuster.ui.navigation.FormFactor
 import com.itv.blockbuster.ui.navigation.rememberFormFactor
@@ -67,18 +70,18 @@ data class HomeRow(
 fun PosterCard(
     item: PortalVodItem,
     isFavorite: Boolean = false,
+    progressRatio: Float = 0f, // NEW: Progress ratio 0.0 to 1.0
     onClick: () -> Unit = {},
     onLongClick: () -> Unit = {},
     onFavoriteIconClick: () -> Unit = {},
-    actionIcon: ImageVector? = null,       // ADD THIS
-    actionIconTint: Color = Color.White    // ADD THIS
+    actionIcon: ImageVector? = null,
+    actionIconTint: Color = Color.White
 ) {
     var focused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(
         targetValue = if (focused) 1.06f else 1f,
         label = "posterScale"
     )
-
     Box(
         modifier = Modifier
             .graphicsLayer { scaleX = scale; scaleY = scale }
@@ -130,7 +133,7 @@ fun PosterCard(
                     .clip(CircleShape)
                     .background(Color.Black.copy(alpha = 0.6f))
                     .focusable()
-                    .clickable(onClick = onFavoriteIconClick) // Reuses the click handler for D-pad
+                    .clickable(onClick = onFavoriteIconClick)
             ) {
                 Icon(
                     imageVector = actionIcon,
@@ -140,6 +143,7 @@ fun PosterCard(
                 )
             }
         }
+
         // Favorite Icon Overlay
         Box(
             modifier = Modifier
@@ -179,6 +183,25 @@ fun PosterCard(
                 )
             }
         }
+
+        // NEW: Netflix-style progress bar at the very bottom
+        if (progressRatio > 0f) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(4.dp)
+                    .align(Alignment.BottomStart)
+                    .zIndex(2f)
+                    .background(Color.Black.copy(alpha = 0.5f))
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .fillMaxWidth(progressRatio.coerceIn(0f, 1f))
+                        .background(BbAccent)
+                )
+            }
+        }
     }
 }
 
@@ -187,6 +210,7 @@ fun PosterCard(
 fun CarouselRow(
     row: HomeRow,
     favoriteIds: Set<String> = emptySet(),
+    progressMap: Map<String, PlaybackProgressEntity> = emptyMap(), // NEW
     onItemClick: (PortalVodItem) -> Unit = {},
     onItemLongClick: (PortalVodItem) -> Unit = {},
     onFavoriteIconClick: (PortalVodItem) -> Unit = {}
@@ -199,15 +223,20 @@ fun CarouselRow(
             fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 8.dp)
         )
-
         LazyRow(
             contentPadding = PaddingValues(horizontal = 24.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             items(row.items, key = { it.id }) { item ->
+                val progress = progressMap[item.id]
+                val ratio = if (progress != null && progress.durationMs > 0) {
+                    (progress.positionMs.toFloat() / progress.durationMs.toFloat()).coerceIn(0f, 1f)
+                } else 0f
+
                 PosterCard(
                     item = item,
                     isFavorite = favoriteIds.contains(item.id),
+                    progressRatio = ratio, // NEW
                     onClick = { onItemClick(item) },
                     onLongClick = { onItemLongClick(item) },
                     onFavoriteIconClick = { onFavoriteIconClick(item) }
@@ -217,11 +246,11 @@ fun CarouselRow(
     }
 }
 
+// ... HeroBanner remains unchanged ...
 @Composable
 fun HeroBanner(hero: PortalVodItem?) {
     val formFactor = rememberFormFactor()
     val height = if (formFactor == FormFactor.MOBILE_PORTRAIT) 280.dp else 380.dp
-
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -236,7 +265,6 @@ fun HeroBanner(hero: PortalVodItem?) {
                 contentScale = ContentScale.Crop
             )
         }
-
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -259,7 +287,6 @@ fun HeroBanner(hero: PortalVodItem?) {
                     )
                 )
         )
-
         if (hero != null) {
             Column(
                 modifier = Modifier
@@ -275,7 +302,6 @@ fun HeroBanner(hero: PortalVodItem?) {
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
-
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -300,7 +326,6 @@ fun HeroBanner(hero: PortalVodItem?) {
                         }
                     }
                 }
-
                 if (hero.description.isNotEmpty()) {
                     Text(
                         text = hero.description,

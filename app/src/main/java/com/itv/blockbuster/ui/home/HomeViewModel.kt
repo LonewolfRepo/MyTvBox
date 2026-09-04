@@ -3,6 +3,7 @@ package com.itv.blockbuster.ui.home
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.itv.blockbuster.data.local.UserPreferencesRepository
+import com.itv.blockbuster.data.local.entity.PlaybackProgressEntity
 import com.itv.blockbuster.data.repository.ConnectionRepository
 import com.itv.blockbuster.data.repository.ServerRepository
 import com.itv.blockbuster.data.repository.StalkerPortalService
@@ -21,7 +22,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.update
@@ -51,9 +51,11 @@ class HomeViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
-    // Live favorites (VOD + SERIES), re-scoped on profile/server change
     private val _favoriteIds = MutableStateFlow<Set<String>>(emptySet())
     val favoriteIds: StateFlow<Set<String>> = _favoriteIds.asStateFlow()
+
+    private val _progressMap = MutableStateFlow<Map<String, PlaybackProgressEntity>>(emptyMap())
+    val progressMap: StateFlow<Map<String, PlaybackProgressEntity>> = _progressMap.asStateFlow()
 
     init {
         viewModelScope.launch {
@@ -65,6 +67,16 @@ class HomeViewModel @Inject constructor(
                     vodRepository.getFavorites(p, s, "SERIES")
                 ) { a, b -> (a + b).map { it.itemId }.toSet() }
             }.collect { _favoriteIds.value = it }
+        }
+
+        viewModelScope.launch {
+            combine(prefs.activeProfileIdFlow, sessionManager.activePortal) { p, sp ->
+                Pair(p, sp?.serverId ?: 0)
+            }.flatMapLatest { (p, s) ->
+                vodRepository.getRecentProgress(p, s)
+            }.collect { list ->
+                _progressMap.value = list.associateBy { it.videoId }
+            }
         }
 
         viewModelScope.launch {
@@ -91,10 +103,9 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    // Single normalized toggle — works for movies AND series
     fun toggleFavorite(item: PortalVodItem) {
         viewModelScope.launch {
-            val p = prefs.activeProfileIdFlow.first()
+            val p = prefs.activeProfileIdFlow.firstOrNull() ?: return@launch
             val s = sessionManager.activePortal.value?.serverId ?: 0
             vodRepository.toggleFavorite(p, s, item, if (item.isSeries) "SERIES" else "VOD")
         }
@@ -129,7 +140,6 @@ class HomeViewModel @Inject constructor(
             .getOrDefault(PortalPage(emptyList(), 0))
         val categories = portalService.fetchVodCategories().getOrDefault(emptyList())
         val rowCategories = categories.filter { it.id != "*" && it.id != "0" }.take(6)
-
         val categoryRows = coroutineScope {
             rowCategories.map { category ->
                 async(Dispatchers.IO) {
@@ -139,12 +149,10 @@ class HomeViewModel @Inject constructor(
                 }
             }.awaitAll().filter { it.items.isNotEmpty() }
         }
-
         val allRows = buildList {
             if (recentPage.items.isNotEmpty()) add(HomeRow("recently_added", "Recently Added", recentPage.items))
             addAll(categoryRows)
         }
-
         _uiState.update { it.copy(isLoading = false, hero = recentPage.items.firstOrNull(), rows = allRows) }
     }
 }
