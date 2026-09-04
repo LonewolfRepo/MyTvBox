@@ -140,9 +140,11 @@ fun RecentsHubScreen(
                                     PosterCard(
                                         item = item,
                                         isFavorite = favoriteIds.contains(item.id),
-                                        onClick = { VodNavigationCache.currentItem = item;
+                                        onClick = {
+                                            VodNavigationCache.currentItem = item
                                             val type = item.contentType.ifEmpty { if (item.isSeries) "series" else "vod" }
-                                            onOpenVod(item.id, type) },
+                                            onOpenVod(item.id, type)
+                                        },
                                         onLongClick = { menuTarget = MenuTarget.Vod(item) },
                                         onFavoriteIconClick = { viewModel.toggleFavorite(item) }
                                     )
@@ -188,9 +190,11 @@ fun RecentsHubScreen(
                                     PosterCard(
                                         item = item,
                                         isFavorite = favoriteIds.contains(item.id),
-                                        onClick = { VodNavigationCache.currentItem = item;
+                                        onClick = {
+                                            VodNavigationCache.currentItem = item
                                             val type = item.contentType.ifEmpty { if (item.isSeries) "series" else "vod" }
-                                            onOpenVod(item.id, type) },
+                                            onOpenVod(item.id, type)
+                                        },
                                         onLongClick = { menuTarget = MenuTarget.Vod(item) },
                                         onFavoriteIconClick = { viewModel.toggleFavorite(item) }
                                     )
@@ -230,12 +234,14 @@ fun RecentsHubScreen(
                 item { Spacer(Modifier.height(32.dp)) }
             }
         }
+
         IconButton(
             onClick = { showClearDialog = true },
             modifier = Modifier.align(Alignment.TopEnd).padding(16.dp)
         ) {
             Icon(Icons.Default.Delete, "Clear all", tint = BbDestructive)
         }
+
         if (showClearDialog) {
             AlertDialog(
                 onDismissRequest = { showClearDialog = false },

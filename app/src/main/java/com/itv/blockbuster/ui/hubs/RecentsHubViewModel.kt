@@ -41,7 +41,6 @@ class RecentsHubViewModel @Inject constructor(
     private val _seriesItems = MutableStateFlow<List<PortalVodItem>>(emptyList())
     val seriesItems: StateFlow<List<PortalVodItem>> = _seriesItems.asStateFlow()
 
-    // Keep raw entities for delete operations
     private val _rawRecents = MutableStateFlow<List<RecentEntity>>(emptyList())
 
     init {
@@ -49,14 +48,19 @@ class RecentsHubViewModel @Inject constructor(
             combine(prefs.activeProfileIdFlow, session.activePortal) { p, sp ->
                 Pair(p, sp?.serverId ?: 0)
             }.flatMapLatest { (p, s) ->
+                // FIX: Combine ALL favorite types (LIVE + VOD + SERIES)
                 combine(
                     recentRepository.getRecents(p, s),
-                    liveTvRepository.getFavorites(p, s, "LIVE")
-                ) { recents, favs -> Pair(recents, favs) }
+                    liveTvRepository.getFavorites(p, s, "LIVE"),
+                    vodRepository.getFavorites(p, s, "VOD"),
+                    vodRepository.getFavorites(p, s, "SERIES")
+                ) { recents, liveFavs, vodFavs, seriesFavs ->
+                    val allFavs = liveFavs + vodFavs + seriesFavs
+                    Pair(recents, allFavs)
+                }
             }.collect { (recents, favs) ->
                 _favoriteIds.value = favs.map { it.itemId }.toSet()
                 _rawRecents.value = recents
-
                 _liveChannels.value = recents.filter { it.type == "LIVE" }.map { it.toChannel() }
                 _movieItems.value = recents.filter { it.type == "VOD" }.map { it.toPortalItem() }
                 _seriesItems.value = recents.filter { it.type == "SERIES" }.map { it.toPortalItem() }
@@ -120,7 +124,9 @@ class RecentsHubViewModel @Inject constructor(
         viewModelScope.launch {
             val p = prefs.activeProfileIdFlow.first()
             val s = session.activePortal.value?.serverId ?: 0
-            vodRepository.toggleFavorite(p, s, item, item.contentType)
+            // Explicitly pass "SERIES" or "VOD" to ensure correct DB mapping
+            val type = if (item.isSeries) "SERIES" else "VOD"
+            vodRepository.toggleFavorite(p, s, item, type)
         }
     }
 }
