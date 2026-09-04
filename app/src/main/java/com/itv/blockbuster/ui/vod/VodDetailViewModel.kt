@@ -47,12 +47,11 @@ class VodDetailViewModel @Inject constructor(
     val state: StateFlow<VodDetailState> = _state.asStateFlow()
 
     init {
-        // FIX: Access the global object directly instead of an injected instance
         val item = VodNavigationCache.currentItem
         if (item != null) {
             _state.update { it.copy(item = item, isLoading = false) }
             loadMetadata(item)
-            if (item.isSeries || contentType == "series")  {
+            if (item.isSeries || contentType == "series") {
                 loadSeasons(item)
             } else {
                 loadMovieProgress(item)
@@ -95,36 +94,48 @@ class VodDetailViewModel @Inject constructor(
         loadEpisodes(season)
     }
 
+    // =====================================================================
+    // RESUME HELPER — fetches progress for the exact video file ID at
+    // play-click time and stores the resume target in PlaybackManager.
+    // =====================================================================
+    private suspend fun resolveResumePosition(fileId: String): Long {
+        // "Play from beginning" explicitly skips resume
+        if (playbackManager.restartFromBeginning) {
+            playbackManager.restartFromBeginning = false
+            return -1L
+        }
+        val profileId = prefs.activeProfileIdFlow.first()
+        val serverId = sessionManager.activePortal.value?.serverId ?: 0
+        val progress = vodRepository.getProgress(profileId, serverId, fileId)
+        return if (progress != null &&
+            progress.positionMs > 10_000 &&                       // only resume past 10s
+            progress.positionMs < progress.durationMs - 30_000    // not near the end
+        ) progress.positionMs else -1L
+    }
+
     fun playMovie(onPlay: (String) -> Unit) {
         val item = _state.value.item ?: return
         viewModelScope.launch {
             _state.update { it.copy(isLoading = true) }
-
             try {
-                // Step 1: Get the actual video file ID
                 val fileIdResult = vodRepository.getMovieFileId(item.id)
                 if (fileIdResult.isFailure) {
                     _state.update { it.copy(isLoading = false) }
                     return@launch
                 }
                 val fileId = fileIdResult.getOrThrow()
-
-                // Step 2: Construct the stream command
                 val cmd = "/media/file_$fileId.mpg"
-
-                // Step 3: Create the stream link
                 val urlResult = vodRepository.createStreamLink(cmd, "vod")
                 if (urlResult.isFailure) {
                     _state.update { it.copy(isLoading = false) }
                     return@launch
                 }
                 val url = urlResult.getOrThrow()
-
                 _state.update { it.copy(isLoading = false) }
 
                 playbackManager.clearVodContext()
                 playbackManager.currentMovieId = item.id
-                playbackManager.currentVideoId = item.id
+                playbackManager.currentVideoId = fileId            // KEY: progress keyed by file ID
                 playbackManager.currentItemId = item.id
                 playbackManager.currentItemType = "VOD"
                 playbackManager.currentTitle = item.name
@@ -142,15 +153,14 @@ class VodDetailViewModel @Inject constructor(
                 playbackManager.currentCountry = item.country
                 playbackManager.episodeQueue = emptyList()
 
-                // ADD: Track Movie in Recents
+                // Fetch resume position for THIS video file ID, pass to player
+                playbackManager.pendingSeekMs = resolveResumePosition(fileId)
+
                 val profileId = prefs.activeProfileIdFlow.first()
                 val serverId = sessionManager.activePortal.value?.serverId ?: 0
                 vodRepository.addRecent(profileId, serverId, item, "VOD")
 
-                // Step 4: Play the stream
-                if (url.isNotEmpty()) {
-                    onPlay(url)
-                }
+                if (url.isNotEmpty()) onPlay(url)
             } catch (e: Exception) {
                 _state.update { it.copy(isLoading = false) }
             }
@@ -160,14 +170,12 @@ class VodDetailViewModel @Inject constructor(
     private fun loadSeasons(item: PortalVodItem) {
         viewModelScope.launch {
             _state.update { it.copy(isLoading = true) }
-
             try {
                 val seasonsResult = vodRepository.getSeasons(item.id)
                 if (seasonsResult.isFailure) {
                     _state.update { it.copy(isLoading = false) }
                     return@launch
                 }
-
                 val seasons = seasonsResult.getOrDefault(emptyList())
                 _state.update {
                     it.copy(
@@ -177,8 +185,6 @@ class VodDetailViewModel @Inject constructor(
                         isLoading = false
                     )
                 }
-
-                // Load episodes for the first season
                 seasons.firstOrNull()?.let { season -> loadEpisodes(season) }
             } catch (e: Exception) {
                 _state.update { it.copy(isLoading = false) }
@@ -211,44 +217,36 @@ class VodDetailViewModel @Inject constructor(
     fun playEpisode(episode: PortalVodItem, onPlay: (String) -> Unit) {
         val item = _state.value.item ?: return
         val season = _state.value.selectedSeason ?: return
-
         viewModelScope.launch {
             _state.update { it.copy(isLoading = true) }
-
             try {
-                // FIX: Use season.id for seasonId, and episode.id for episodeId
                 val fileIdResult = vodRepository.getEpisodeFileId(
                     movieId = item.id,
-                    seasonId = season.id,      // CHANGED from season.seasonId
-                    episodeId = episode.id     // CHANGED from episode.episodeId
+                    seasonId = season.id,
+                    episodeId = episode.id
                 )
-
                 if (fileIdResult.isFailure) {
                     _state.update { it.copy(isLoading = false) }
                     return@launch
                 }
                 val fileId = fileIdResult.getOrThrow()
-
                 val cmd = "/media/file_$fileId.mpg"
-
                 val urlResult = vodRepository.createStreamLink(cmd, "vod")
                 if (urlResult.isFailure) {
                     _state.update { it.copy(isLoading = false) }
                     return@launch
                 }
                 val url = urlResult.getOrThrow()
-
                 _state.update { it.copy(isLoading = false) }
 
-                // FIX: Set PlaybackManager context BEFORE navigating to player
                 val episodes = _state.value.episodes
                 playbackManager.clearVodContext()
                 playbackManager.currentMovieId = item.id
                 playbackManager.currentSeasonId = season.id
                 playbackManager.currentSeasonNumber = season.seasonNumber
-                playbackManager.currentEpisodeId = episode.id
+                playbackManager.currentEpisodeId = episode.id       // for nextInQueue
                 playbackManager.currentEpisodeNumber = episode.episodeNumber
-                playbackManager.currentVideoId = episode.id
+                playbackManager.currentVideoId = fileId             // KEY: progress keyed by file ID
                 playbackManager.currentItemId = item.id
                 playbackManager.currentItemType = "SERIES"
                 playbackManager.currentTitle = item.name
@@ -264,17 +262,16 @@ class VodDetailViewModel @Inject constructor(
                 playbackManager.currentAddedDate = item.addedDate
                 playbackManager.currentGenres = item.genres
                 playbackManager.currentCountry = item.country
-                playbackManager.episodeQueue = episodes  // FIX: Set episode queue for auto-next
+                playbackManager.episodeQueue = episodes
 
+                // Fetch resume position for THIS video file ID, pass to player
+                playbackManager.pendingSeekMs = resolveResumePosition(fileId)
 
-                //ADD TO RECENTS
                 val profileId = prefs.activeProfileIdFlow.first()
                 val serverId = sessionManager.activePortal.value?.serverId ?: 0
                 vodRepository.addRecent(profileId, serverId, item, "SERIES")
 
-                if (url.isNotEmpty()) {
-                    onPlay(url)
-                }
+                if (url.isNotEmpty()) onPlay(url)
             } catch (e: Exception) {
                 _state.update { it.copy(isLoading = false) }
             }
@@ -299,10 +296,10 @@ class VodDetailViewModel @Inject constructor(
         loadMovieProgress(item)
         if (_state.value.hasSeasons) loadEpisodesProgress(item.id)
     }
+
     fun playMovieFromBeginning(onPlay: (String) -> Unit) {
         val item = _state.value.item ?: return
         viewModelScope.launch {
-            // Clear stored progress so player starts at 0
             val profileId = prefs.activeProfileIdFlow.first()
             val serverId = sessionManager.activePortal.value?.serverId ?: 0
             val progress = vodRepository.getProgress(profileId, serverId, item.id)
@@ -322,6 +319,7 @@ class VodDetailViewModel @Inject constructor(
             playMovie(onPlay)
         }
     }
+
     fun playEpisodeFromBeginning(episode: PortalVodItem, onPlay: (String) -> Unit) {
         val item = _state.value.item ?: return
         viewModelScope.launch {
@@ -344,6 +342,7 @@ class VodDetailViewModel @Inject constructor(
             _state.update {
                 it.copy(episodeProgressMap = it.episodeProgressMap - episode.id)
             }
+            playbackManager.restartFromBeginning = true
             playEpisode(episode, onPlay)
         }
     }

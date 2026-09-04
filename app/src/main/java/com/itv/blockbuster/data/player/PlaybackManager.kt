@@ -14,10 +14,7 @@ import javax.inject.Singleton
 class PlaybackManager @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
-
-    val player: ExoPlayer by lazy {
-        ExoPlayer.Builder(context).build()
-    }
+    val player: ExoPlayer by lazy { ExoPlayer.Builder(context).build() }
 
     @Volatile
     var isFullscreenActive: Boolean = false
@@ -34,19 +31,21 @@ class PlaybackManager @Inject constructor(
     var currentEpisodeId: String = ""
     var currentEpisodeNumber: String = ""
     var currentVideoId: String = ""
-
-
     var episodeQueue: List<PortalVodItem> = emptyList()
 
     // Skip resume and play from beginning
     var restartFromBeginning: Boolean = false
 
-    var currentItemId: String = ""   // movieId for VOD/Series, channelId for Live
-    var currentItemType: String = ""   // "VOD", "SERIES", "LIVE"
+    // NEW: resume target passed from VodDetailViewModel at play-click time.
+    // -1 = no resume. Player seeks to this once STATE_READY, then resets to -1.
+    var pendingSeekMs: Long = -1L
+
+    var currentItemId: String = ""
+    var currentItemType: String = ""
     var currentTitle: String = ""
     var currentLogoUrl: String = ""
     var currentContentType: String = "vod"
-    var currentChannelCmd: String = "" // For Live TV
+    var currentChannelCmd: String = ""
     var currentDescription: String = ""
     var currentDirector: String = ""
     var currentActors: String = ""
@@ -68,14 +67,12 @@ class PlaybackManager @Inject constructor(
             player.setMediaItem(mediaItem)
             player.prepare()
         }
-        player.playWhenReady = true
+        // If a resume seek is pending, hold auto-play until the seek is applied
+        // on STATE_READY (prevents a flash from position 0).
+        player.playWhenReady = pendingSeekMs <= 0
     }
 
-    fun setLiveContext(
-        channel: PortalChannel,
-        epg: List<EpgProgram>,
-        allChannels: List<PortalChannel>
-    ) {
+    fun setLiveContext(channel: PortalChannel, epg: List<EpgProgram>, allChannels: List<PortalChannel>) {
         currentChannel = channel
         epgPrograms = epg
         channelList = allChannels
@@ -91,19 +88,16 @@ class PlaybackManager @Inject constructor(
         episodeQueue = emptyList()
     }
 
-    /** Moves the live channel index by [delta] (wraps around). */
     fun zap(delta: Int): PortalChannel? {
         val list = channelList
         val current = currentChannel ?: return null
         if (list.isEmpty()) return null
-
         val index = list.indexOfFirst { it.id == current.id }
         val base = if (index == -1) 0 else index
         val nextIndex = (base + delta + list.size) % list.size
         return list.getOrNull(nextIndex)
     }
 
-    /** Returns the episode that follows the current one in the queue. */
     fun nextInQueue(): PortalVodItem? {
         val currentId = currentEpisodeId.ifEmpty { currentVideoId }
         if (currentId.isEmpty() || episodeQueue.isEmpty()) return null

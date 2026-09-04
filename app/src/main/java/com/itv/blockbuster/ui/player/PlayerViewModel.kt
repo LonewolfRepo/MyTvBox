@@ -79,10 +79,8 @@ class PlayerViewModel @Inject constructor(
                 .getOrDefault(PortalPage(emptyList(), 0)).items
             playbackManager.channelList = all
         }
-
         val channel = playbackManager.channelList.firstOrNull { it.id == channelId }
             ?: playbackManager.currentChannel
-
         if (channel != null) {
             playbackManager.currentChannel = channel
             val epg = liveTvRepository.getShortEpg(channel.id).getOrDefault(emptyList())
@@ -100,13 +98,11 @@ class PlayerViewModel @Inject constructor(
             val next = playbackManager.zap(delta) ?: return@launch
             val url = liveTvRepository.createStreamLink(next.cmd).getOrDefault("")
             if (url.isEmpty()) return@launch
-
             playbackManager.currentChannel = next
             val epg = liveTvRepository.getShortEpg(next.id).getOrDefault(emptyList())
             playbackManager.epgPrograms = epg
             _liveBanner.value = LiveBannerData(next, epg.firstOrNull(), epg.getOrNull(1))
             playbackManager.play(url)
-
             val profileId = prefs.activeProfileIdFlow.first()
             val serverId = sessionManager.activePortal.value?.serverId ?: 0
             liveTvRepository.addRecent(profileId, serverId, next)
@@ -124,8 +120,11 @@ class PlayerViewModel @Inject constructor(
         viewModelScope.launch {
             val player = playbackManager.player
             val videoId = playbackManager.currentVideoId
-            if (videoId.isEmpty() || player.duration <= 0 || player.currentPosition <= 0) return@launch
-
+            if (videoId.isEmpty() || player.duration <= 0) return@launch
+            // Don't save until the video has played for at least 10 seconds.
+            // This also protects the saved resume position from being
+            // overwritten with ~0 right after a seek is requested.
+            if (player.currentPosition < 10_000) return@launch
             vodRepository.saveProgress(
                 profileId = profileId(),
                 serverId = serverId(),
@@ -138,18 +137,12 @@ class PlayerViewModel @Inject constructor(
                 positionMs = player.currentPosition,
                 durationMs = player.duration
             )
-
-            // FIX: Also track VOD recents
-            recentRepository.saveFromPlayback(playbackManager)
         }
     }
 
-    // FIX: Use getEpisodeFileId to resolve actual file ID, not episode ID
     fun playNextEpisode() {
         viewModelScope.launch {
             val next = playbackManager.nextInQueue() ?: return@launch
-
-            // FIX: Resolve actual file ID using getEpisodeFileId
             val fileIdResult = vodRepository.getEpisodeFileId(
                 movieId = playbackManager.currentMovieId,
                 seasonId = playbackManager.currentSeasonId,
@@ -157,22 +150,18 @@ class PlayerViewModel @Inject constructor(
             )
             if (fileIdResult.isFailure) return@launch
             val fileId = fileIdResult.getOrThrow()
-
             val cmd = "/media/file_$fileId.mpg"
             val urlResult = vodRepository.createStreamLink(cmd, "vod")
             if (urlResult.isFailure) return@launch
             val url = urlResult.getOrThrow()
             if (url.isEmpty()) return@launch
 
-            // Update PlaybackManager context for the next episode
             playbackManager.currentEpisodeId = next.id
             playbackManager.currentEpisodeNumber = next.episodeNumber
-            playbackManager.currentVideoId = next.id
+            playbackManager.currentVideoId = fileId          // keep progress keyed by file ID
+            playbackManager.pendingSeekMs = -1L              // next episode starts at 0
             playbackManager.restartFromBeginning = true
             playbackManager.play(url)
-
-            // Track recents for the next episode
-            recentRepository.saveFromPlayback(playbackManager)
         }
     }
 
