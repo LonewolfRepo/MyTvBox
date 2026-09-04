@@ -122,9 +122,25 @@ class VodDetailViewModel @Inject constructor(
 
                 _state.update { it.copy(isLoading = false) }
 
+                playbackManager.clearVodContext()
+                playbackManager.currentMovieId = item.id
+                playbackManager.currentVideoId = item.id
                 playbackManager.currentItemId = item.id
                 playbackManager.currentItemType = "VOD"
                 playbackManager.currentTitle = item.name
+                playbackManager.currentLogoUrl = item.logoUrl
+                playbackManager.currentContentType = "vod"
+                playbackManager.currentDescription = item.description
+                playbackManager.currentDirector = item.director
+                playbackManager.currentActors = item.actors
+                playbackManager.currentYear = item.year
+                playbackManager.currentRatingImdb = item.ratingImdb
+                playbackManager.currentRatingMpaa = item.ratingMpaa
+                playbackManager.currentAge = item.age
+                playbackManager.currentAddedDate = item.addedDate
+                playbackManager.currentGenres = item.genres
+                playbackManager.currentCountry = item.country
+                playbackManager.episodeQueue = emptyList()
 
                 // ADD: Track Movie in Recents
                 val profileId = prefs.activeProfileIdFlow.first()
@@ -224,10 +240,34 @@ class VodDetailViewModel @Inject constructor(
 
                 _state.update { it.copy(isLoading = false) }
 
-                playbackManager.currentItemId = item.id // Use movieId so series groups together!
+                // FIX: Set PlaybackManager context BEFORE navigating to player
+                val episodes = _state.value.episodes
+                playbackManager.clearVodContext()
+                playbackManager.currentMovieId = item.id
+                playbackManager.currentSeasonId = season.id
+                playbackManager.currentSeasonNumber = season.seasonNumber
+                playbackManager.currentEpisodeId = episode.id
+                playbackManager.currentEpisodeNumber = episode.episodeNumber
+                playbackManager.currentVideoId = episode.id
+                playbackManager.currentItemId = item.id
                 playbackManager.currentItemType = "SERIES"
-                playbackManager.currentTitle = episode.name
+                playbackManager.currentTitle = item.name
+                playbackManager.currentLogoUrl = item.logoUrl
+                playbackManager.currentContentType = "series"
+                playbackManager.currentDescription = item.description
+                playbackManager.currentDirector = item.director
+                playbackManager.currentActors = item.actors
+                playbackManager.currentYear = item.year
+                playbackManager.currentRatingImdb = item.ratingImdb
+                playbackManager.currentRatingMpaa = item.ratingMpaa
+                playbackManager.currentAge = item.age
+                playbackManager.currentAddedDate = item.addedDate
+                playbackManager.currentGenres = item.genres
+                playbackManager.currentCountry = item.country
+                playbackManager.episodeQueue = episodes  // FIX: Set episode queue for auto-next
 
+
+                //ADD TO RECENTS
                 val profileId = prefs.activeProfileIdFlow.first()
                 val serverId = sessionManager.activePortal.value?.serverId ?: 0
                 vodRepository.addRecent(profileId, serverId, item, "SERIES")
@@ -278,6 +318,7 @@ class VodDetailViewModel @Inject constructor(
                 )
             }
             _state.update { it.copy(movieProgress = null) }
+            playbackManager.restartFromBeginning = true
             playMovie(onPlay)
         }
     }

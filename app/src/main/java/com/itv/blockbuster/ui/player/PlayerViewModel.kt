@@ -44,9 +44,9 @@ class PlayerViewModel @Inject constructor(
     val autoPlayNext: StateFlow<Boolean> = prefs.autoPlayNextFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
 
-    // ── Seek intervals (per profile + server settings) ──
     private val _rewindMs = MutableStateFlow(15_000L)
     val rewindMs: StateFlow<Long> = _rewindMs.asStateFlow()
+
     private val _forwardMs = MutableStateFlow(30_000L)
     val forwardMs: StateFlow<Long> = _forwardMs.asStateFlow()
 
@@ -61,7 +61,6 @@ class PlayerViewModel @Inject constructor(
             ) { p, sp ->
                 Pair(p, sp?.serverId ?: 0)
             }.collect { pair ->
-                // FIX: Extract pair elements explicitly to satisfy compiler type inference
                 val p = pair.first
                 val s = pair.second
                 _rewindMs.value = settings.getInt(p, s, "rewind_interval", 15) * 1000L
@@ -73,30 +72,26 @@ class PlayerViewModel @Inject constructor(
     // =====================================================================
     // LIVE
     // =====================================================================
+
     suspend fun initLive(channelId: String) {
         if (playbackManager.channelList.isEmpty()) {
             val all = liveTvRepository.getAllChannels()
                 .getOrDefault(PortalPage(emptyList(), 0)).items
             playbackManager.channelList = all
         }
+
         val channel = playbackManager.channelList.firstOrNull { it.id == channelId }
             ?: playbackManager.currentChannel
+
         if (channel != null) {
             playbackManager.currentChannel = channel
             val epg = liveTvRepository.getShortEpg(channel.id).getOrDefault(emptyList())
             playbackManager.epgPrograms = epg
             _liveBanner.value = LiveBannerData(channel, epg.firstOrNull(), epg.getOrNull(1))
 
-            // Track recents
             val profileId = prefs.activeProfileIdFlow.first()
             val serverId = sessionManager.activePortal.value?.serverId ?: 0
             liveTvRepository.addRecent(profileId, serverId, channel)
-        }
-    }
-
-    private fun saveToRecents() {
-        viewModelScope.launch {
-            recentRepository.saveFromPlayback(playbackManager)
         }
     }
 
@@ -105,6 +100,7 @@ class PlayerViewModel @Inject constructor(
             val next = playbackManager.zap(delta) ?: return@launch
             val url = liveTvRepository.createStreamLink(next.cmd).getOrDefault("")
             if (url.isEmpty()) return@launch
+
             playbackManager.currentChannel = next
             val epg = liveTvRepository.getShortEpg(next.id).getOrDefault(emptyList())
             playbackManager.epgPrograms = epg
@@ -120,6 +116,7 @@ class PlayerViewModel @Inject constructor(
     // =====================================================================
     // VOD PROGRESS
     // =====================================================================
+
     suspend fun getProgress(videoId: String): PlaybackProgressEntity? =
         vodRepository.getProgress(profileId(), serverId(), videoId)
 
@@ -128,6 +125,7 @@ class PlayerViewModel @Inject constructor(
             val player = playbackManager.player
             val videoId = playbackManager.currentVideoId
             if (videoId.isEmpty() || player.duration <= 0 || player.currentPosition <= 0) return@launch
+
             vodRepository.saveProgress(
                 profileId = profileId(),
                 serverId = serverId(),
@@ -140,20 +138,41 @@ class PlayerViewModel @Inject constructor(
                 positionMs = player.currentPosition,
                 durationMs = player.duration
             )
+
+            // FIX: Also track VOD recents
+            recentRepository.saveFromPlayback(playbackManager)
         }
     }
 
+    // FIX: Use getEpisodeFileId to resolve actual file ID, not episode ID
     fun playNextEpisode() {
         viewModelScope.launch {
             val next = playbackManager.nextInQueue() ?: return@launch
-            val cmd = next.cmd.ifEmpty { "/media/file_${next.id}.mpg" }
-            val url = vodRepository.createStreamLink(cmd, "vod", next.episodeNumber).getOrDefault("")
+
+            // FIX: Resolve actual file ID using getEpisodeFileId
+            val fileIdResult = vodRepository.getEpisodeFileId(
+                movieId = playbackManager.currentMovieId,
+                seasonId = playbackManager.currentSeasonId,
+                episodeId = next.id
+            )
+            if (fileIdResult.isFailure) return@launch
+            val fileId = fileIdResult.getOrThrow()
+
+            val cmd = "/media/file_$fileId.mpg"
+            val urlResult = vodRepository.createStreamLink(cmd, "vod")
+            if (urlResult.isFailure) return@launch
+            val url = urlResult.getOrThrow()
             if (url.isEmpty()) return@launch
+
+            // Update PlaybackManager context for the next episode
             playbackManager.currentEpisodeId = next.id
             playbackManager.currentEpisodeNumber = next.episodeNumber
             playbackManager.currentVideoId = next.id
             playbackManager.restartFromBeginning = true
             playbackManager.play(url)
+
+            // Track recents for the next episode
+            recentRepository.saveFromPlayback(playbackManager)
         }
     }
 

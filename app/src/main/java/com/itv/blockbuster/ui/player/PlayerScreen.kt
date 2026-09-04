@@ -30,6 +30,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -69,6 +70,7 @@ import kotlinx.coroutines.delay
 // =====================================================================
 
 private object PlayerHelpers {
+
     fun isNearlyFinished(positionMs: Long, durationMs: Long): Boolean {
         if (durationMs <= 0) return false
         val remaining = durationMs - positionMs
@@ -102,19 +104,19 @@ fun PlayerScreen(
     val playbackManager = viewModel.playbackManager
     val player = playbackManager.player
     val isLive = channelId != "none"
-
     val focusRequester = remember { FocusRequester() }
-    var playerViewRef by remember { mutableStateOf<PlayerView?>(null) }
 
+    var playerViewRef by remember { mutableStateOf<PlayerView?>(null) }
     var bannerVisible by remember { mutableStateOf(false) }
     val banner by viewModel.liveBanner.collectAsState()
-
-    var resumeProgress by remember { mutableStateOf<PlaybackProgressEntity?>(null) }
     var countdown by remember { mutableStateOf<Int?>(null) }
     var ended by remember { mutableStateOf(false) }
     val autoPlayNext by viewModel.autoPlayNext.collectAsState()
 
-    // NEW: settings-driven seek intervals
+    // FIX: Pending seek position — applied once player reaches STATE_READY
+    var pendingSeekMs by remember { mutableLongStateOf(-1L) }
+
+    // Settings-driven seek intervals
     val rewindMs by viewModel.rewindMs.collectAsState()
     val forwardMs by viewModel.forwardMs.collectAsState()
 
@@ -139,16 +141,19 @@ fun PlayerScreen(
         }
     }
 
-    // VOD: resume prompt
+    // VOD: auto-resume — defer seek until player is STATE_READY
     LaunchedEffect(videoId) {
         if (!isLive && videoId != "none" && !playbackManager.restartFromBeginning) {
-            val progress = viewModel.getProgress(videoId)
+            // FIX: Use playbackManager.currentVideoId (set by VodDetailViewModel
+            // before navigation) so the lookup matches what was saved
+            val lookupId = playbackManager.currentVideoId.ifEmpty { videoId }
+            val progress = viewModel.getProgress(lookupId)
             if (progress != null &&
                 progress.positionMs > 5000 &&
                 !PlayerHelpers.isNearlyFinished(progress.positionMs, progress.durationMs)
             ) {
-                player.pause()
-                resumeProgress = progress
+                // Defer seek until player fires STATE_READY
+                pendingSeekMs = progress.positionMs
             }
         }
         playbackManager.restartFromBeginning = false
@@ -158,13 +163,19 @@ fun PlayerScreen(
     DisposableEffect(Unit) {
         val originalOrientation = activity?.requestedOrientation
         activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-
         playbackManager.isFullscreenActive = true
         playbackManager.play(streamUrl)
 
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
                 ended = (state == Player.STATE_ENDED)
+
+                // FIX: Perform pending seek once the player is fully loaded
+                if (state == Player.STATE_READY && pendingSeekMs >= 0) {
+                    player.seekTo(pendingSeekMs)
+                    player.play()
+                    pendingSeekMs = -1L
+                }
             }
         }
         player.addListener(listener)
@@ -273,27 +284,6 @@ fun PlayerScreen(
             LiveBannerOverlay(
                 banner = banner!!,
                 modifier = Modifier.align(Alignment.TopCenter)
-            )
-        }
-
-        // ── RESUME DIALOG (VOD) ──
-        resumeProgress?.let { progress ->
-            ResumeDialog(
-                progress = progress,
-                onResume = {
-                    player.seekTo(progress.positionMs)
-                    player.play()
-                    resumeProgress = null
-                },
-                onStartOver = {
-                    player.seekTo(0)
-                    player.play()
-                    resumeProgress = null
-                },
-                onDismiss = {
-                    player.play()
-                    resumeProgress = null
-                }
             )
         }
 
@@ -430,42 +420,4 @@ private fun LiveBannerOverlay(
             Icon(Icons.Default.KeyboardArrowDown, "Channel down", tint = BbAccent, modifier = Modifier.size(20.dp))
         }
     }
-}
-
-// =====================================================================
-// RESUME DIALOG (VOD)
-// =====================================================================
-
-@Composable
-private fun ResumeDialog(
-    progress: PlaybackProgressEntity,
-    onResume: () -> Unit,
-    onStartOver: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = BbSurface,
-        title = { Text("Resume playback?", color = BbTextPrimary) },
-        text = {
-            Text(
-                "You stopped at ${PlayerHelpers.formatTime(progress.positionMs)}. " +
-                        "Resume from there or start from the beginning?",
-                color = BbTextSecondary
-            )
-        },
-        confirmButton = {
-            Button(
-                onClick = onResume,
-                colors = ButtonDefaults.buttonColors(containerColor = BbAccent)
-            ) {
-                Text("Resume from ${PlayerHelpers.formatTime(progress.positionMs)}")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onStartOver) {
-                Text("Play from beginning", color = BbTextSecondary)
-            }
-        }
-    )
 }
