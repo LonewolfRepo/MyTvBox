@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -57,8 +58,9 @@ fun VodBrowserScreen(
 ) {
     val state by viewModel.state.collectAsState()
     val favoriteIds by viewModel.favoriteIds.collectAsState()
-    val progressMap by viewModel.progressMap.collectAsState() // ADD
-    // Initialize the ViewModel with the correct content type
+    val progressMap by viewModel.progressMap.collectAsState()
+    val hasMoreCategories by viewModel.hasMoreCategories.collectAsState()
+
     LaunchedEffect(contentType) {
         viewModel.initialize(contentType)
     }
@@ -87,21 +89,40 @@ fun VodBrowserScreen(
                         onCategorySelected = { viewModel.selectCategory(it) }
                     )
                 }
-
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
                     items(state.rows, key = { it.id }) { row ->
                         CarouselRow(
                             row = row,
                             progressMap = progressMap,
-                            favoriteIds = favoriteIds,                      // ADD
+                            favoriteIds = favoriteIds,
                             onItemClick = { item ->
                                 VodNavigationCache.currentItem = item
                                 onOpenDetail(item.id)
                             },
-                            onFavoriteIconClick = { item ->                 // ADD
+                            onFavoriteIconClick = { item ->
                                 viewModel.toggleFavorite(item)
-                            }
+                            },
+                            onLoadMore = { viewModel.loadMoreRowItems(row.id) }
                         )
+                    }
+
+                    // Vertical Pagination Trigger
+                    if (hasMoreCategories) {
+                        item {
+                            LaunchedEffect(Unit) { viewModel.loadMoreCategories() }
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator(
+                                    color = BbAccent,
+                                    strokeWidth = 2.dp,
+                                    modifier = Modifier.size(32.dp)
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -117,7 +138,6 @@ private fun BrowserCategoryDropdown(
 ) {
     var expanded by remember { mutableStateOf(false) }
     var isFocused by remember { mutableStateOf(false) }
-
     Box(modifier = Modifier.width(220.dp)) {
         Row(
             modifier = Modifier
@@ -149,7 +169,6 @@ private fun BrowserCategoryDropdown(
                 tint = BbTextSecondary
             )
         }
-
         DropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },

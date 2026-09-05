@@ -1,6 +1,5 @@
 package com.itv.blockbuster.data.local.dao
 
-import android.util.Log
 import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
@@ -12,25 +11,20 @@ import kotlinx.coroutines.flow.Flow
 interface PlaybackProgressDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun saveProgressInternal(progress: PlaybackProgressEntity)
+    suspend fun saveProgress(progress: PlaybackProgressEntity)
 
-    // ── PLAYER PATH: resume by video file ID ──
     @Query("SELECT * FROM playback_progress WHERE profileId = :profileId AND serverId = :serverId AND videoId = :videoId LIMIT 1")
-    suspend fun getProgressInternal(profileId: Int, serverId: Int, videoId: String): PlaybackProgressEntity?
+    suspend fun getProgress(profileId: Int, serverId: Int, videoId: String): PlaybackProgressEntity?
 
-    // ── UI PATH: Movie progress by movieId (episodeId is empty for movies) ──
     @Query("SELECT * FROM playback_progress WHERE profileId = :profileId AND serverId = :serverId AND movieId = :movieId AND episodeId = '' ORDER BY timestamp DESC LIMIT 1")
-    suspend fun getMovieProgressByMovieIdInternal(profileId: Int, serverId: Int, movieId: String): PlaybackProgressEntity?
+    suspend fun getMovieProgressByMovieId(profileId: Int, serverId: Int, movieId: String): PlaybackProgressEntity?
 
-    // ── UI PATH: Episode progress by composite key ──
     @Query("SELECT * FROM playback_progress WHERE profileId = :profileId AND serverId = :serverId AND movieId = :movieId AND seasonId = :seasonId AND episodeId = :episodeId LIMIT 1")
-    suspend fun getProgressForEpisodeInternal(profileId: Int, serverId: Int, movieId: String, seasonId: String, episodeId: String): PlaybackProgressEntity?
+    suspend fun getProgressForEpisode(profileId: Int, serverId: Int, movieId: String, seasonId: String, episodeId: String): PlaybackProgressEntity?
 
-    // ── UI PATH: All progress for a movie/series ──
     @Query("SELECT * FROM playback_progress WHERE profileId = :profileId AND serverId = :serverId AND movieId = :movieId")
     suspend fun getProgressForMovie(profileId: Int, serverId: Int, movieId: String): List<PlaybackProgressEntity>
 
-    // ── TILES PATH: Recent progress ──
     @Query("SELECT * FROM playback_progress WHERE profileId = :profileId AND serverId = :serverId ORDER BY timestamp DESC")
     fun getRecentProgress(profileId: Int, serverId: Int): Flow<List<PlaybackProgressEntity>>
 
@@ -39,40 +33,4 @@ interface PlaybackProgressDao {
 
     @Query("DELETE FROM playback_progress WHERE profileId = :profileId AND serverId = :serverId AND videoId = :videoId")
     suspend fun deleteProgress(profileId: Int, serverId: Int, videoId: String)
-
-    // ── Debug wrappers ──
-    suspend fun saveProgress(progress: PlaybackProgressEntity) {
-        Log.d("PlaybackProgressDao", "═══════════════════════════════════════════")
-        Log.d("PlaybackProgressDao", "SAVE PROGRESS called:")
-        Log.d("PlaybackProgressDao", "  profileId      = ${progress.profileId}")
-        Log.d("PlaybackProgressDao", "  serverId       = ${progress.serverId}")
-        Log.d("PlaybackProgressDao", "  movieId        = ${progress.movieId}")
-        Log.d("PlaybackProgressDao", "  seasonId       = ${progress.seasonId}")
-        Log.d("PlaybackProgressDao", "  episodeId      = ${progress.episodeId}")
-        Log.d("PlaybackProgressDao", "  videoId        = ${progress.videoId}")
-        Log.d("PlaybackProgressDao", "  positionMs     = ${progress.positionMs}")
-        Log.d("PlaybackProgressDao", "═══════════════════════════════════════════")
-        saveProgressInternal(progress)
-    }
-
-    suspend fun getProgress(profileId: Int, serverId: Int, videoId: String): PlaybackProgressEntity? {
-        Log.d("PlaybackProgressDao", "GET PROGRESS (player path) called: videoId=$videoId")
-        val result = getProgressInternal(profileId, serverId, videoId)
-        Log.d("PlaybackProgressDao", "  RESULT = ${if (result != null) "FOUND" else "NOT FOUND"}")
-        return result
-    }
-
-    suspend fun getMovieProgressByMovieId(profileId: Int, serverId: Int, movieId: String): PlaybackProgressEntity? {
-        Log.d("PlaybackProgressDao", "GET MOVIE PROGRESS called: movieId=$movieId")
-        val result = getMovieProgressByMovieIdInternal(profileId, serverId, movieId)
-        Log.d("PlaybackProgressDao", "  RESULT = ${if (result != null) "FOUND" else "NOT FOUND"}")
-        return result
-    }
-
-    suspend fun getProgressForEpisode(profileId: Int, serverId: Int, movieId: String, seasonId: String, episodeId: String): PlaybackProgressEntity? {
-        Log.d("PlaybackProgressDao", "GET EPISODE PROGRESS called: movieId=$movieId, seasonId=$seasonId, episodeId=$episodeId")
-        val result = getProgressForEpisodeInternal(profileId, serverId, movieId, seasonId, episodeId)
-        Log.d("PlaybackProgressDao", "  RESULT = ${if (result != null) "FOUND" else "NOT FOUND"}")
-        return result
-    }
 }

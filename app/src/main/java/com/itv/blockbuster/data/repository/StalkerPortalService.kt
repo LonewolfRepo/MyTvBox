@@ -62,7 +62,6 @@ class StalkerPortalService @Inject constructor(
         session.clearSession()
 
         val cleanHost = config.host.trimEnd('/')
-
         var detectedPath: String? = null
         var handshakeToken: String? = null
         var lastError = "Unknown error"
@@ -71,10 +70,8 @@ class StalkerPortalService @Inject constructor(
             try {
                 val handshakeUrl =
                     "$cleanHost${path}server/load.php?action=handshake&type=stb&JsHttpRequest=1-xml"
-
                 val response = api.handshake(handshakeUrl)
                 val token = response.js.token.trim()
-
                 if (token.isNotEmpty()) {
                     detectedPath = path
                     handshakeToken = token
@@ -105,7 +102,6 @@ class StalkerPortalService @Inject constructor(
         session.setBearerToken(handshakeToken)
 
         val serialNumber = generateSerial(config.mac)
-
         val profileUrl = "$cleanHost${detectedPath}server/load.php" +
                 "?action=get_profile&type=stb&hd=1" +
                 "&ver=ImageDescription:%200.2.18-r14-pub-250" +
@@ -244,15 +240,12 @@ class StalkerPortalService @Inject constructor(
         series: String = ""
     ): Result<String> = safe {
         require(cmd.isNotBlank()) { "Stream cmd cannot be empty" }
-
         val encodedCmd = URLEncoder.encode(cmd, "UTF-8")
         val seriesParam = if (series.isNotEmpty()) "&series=$series" else "&series="
-
         val url = buildLoadUrl(
             "action=create_link&type=$type&cmd=$encodedCmd$seriesParam" +
                     "&forced_storage=undefined&disable_ad=0&download=0"
         )
-
         val fullCmd = api.createLink(url).js.cmd
         Regex("https?://[^\\s\"']+").find(fullCmd)?.value ?: fullCmd.trim()
     }
@@ -272,10 +265,10 @@ class StalkerPortalService @Inject constructor(
         val category = categoryId.ifBlank { "*" }
         val searchParam = if (search.isNullOrBlank()) "" else
             "&search=${URLEncoder.encode(search.trim(), "UTF-8")}"
-
+        // FIX: Removed page_offset. Server dictates max_page_items and handles offset automatically via 'p'
+        // The Stalker API uses "genre" parameter for VOD category filtering
         val params = "action=get_ordered_list&type=$type&sortby=added" +
-                "&category=$category&page_offset=$offset&p=$page&video=all$searchParam"
-
+                "&genre=$category&p=$page&video=all$searchParam"
         val response = api.getVodList(buildLoadUrl(params))
         val items = response.js.data.orEmpty().map { it.toDomain(type) }
         return PortalPage(items, response.js.totalItems.toIntOrNull() ?: items.size)
@@ -287,11 +280,13 @@ class StalkerPortalService @Inject constructor(
         return "$loader?$params&JsHttpRequest=1-xml"
     }
 
-    // FIX: Rewritten absoluteUrl to prevent double paths and protocol corruption
     private fun absoluteUrl(path: String?): String {
         if (path.isNullOrBlank()) return ""
-        if (path.startsWith("http://", true) || path.startsWith("https://", true)) return path
 
+        // FIX: Suppress invalid "false" or "null" strings returned by some portals
+        if (path.equals("false", ignoreCase = true) || path.equals("null", ignoreCase = true)) return ""
+
+        if (path.startsWith("http://", true) || path.startsWith("https://", true)) return path
         val host = session.activePortal.value?.host?.trimEnd('/') ?: return path
         val portalDir = session.portalDir.value.trimEnd('/')
 
@@ -301,10 +296,7 @@ class StalkerPortalService @Inject constructor(
         } else {
             if (path.startsWith("/")) path else "/$path"
         }
-
         var result = "$host$cleanPath"
-
-        // Fix double slashes in the path part, but preserve the protocol "://"
         val protocolEnd = result.indexOf("://")
         if (protocolEnd != -1) {
             val protocol = result.substring(0, protocolEnd + 3)
@@ -313,7 +305,6 @@ class StalkerPortalService @Inject constructor(
         } else {
             result = result.replace("//", "/")
         }
-
         return result
     }
 
@@ -384,25 +375,22 @@ class StalkerPortalService @Inject constructor(
     private fun generateSerial(mac: String): String {
         val cleanMac = mac.replace(":", "").uppercase(Locale.US)
         if (cleanMac.length < 12) return "102014J000000"
-
         val macBytes = cleanMac.chunked(2)
         if (macBytes.size < 6) return "102014J000000"
-
         val i = macBytes[3].toIntOrNull(16) ?: 0
         val i2 = macBytes[4].toIntOrNull(16) ?: 0
         val i3 = macBytes[5].toIntOrNull(16) ?: 0
-
         val months = arrayOf(
-            "102014", "112014", "122014", "012015", "022015",
-            "032015", "042015", "052015", "062015", "072015",
-            "082015", "092015", "102015", "112015", "122015"
+            "102014", "112014", "122014",
+            "012015", "022015", "032015",
+            "042015", "052015", "062015",
+            "072015", "082015", "092015",
+            "102015", "112015", "122015"
         )
         val letters = arrayOf("J", "K", "L", "M", "N")
-
         val part1 = months[i % months.size]
         val part2 = letters[i2 % letters.size]
         val part3 = String.format(Locale.US, "%06d", i3 or (i2 shl 8)).take(6)
-
         return part1 + part2 + part3
     }
 
@@ -431,19 +419,15 @@ class StalkerPortalService @Inject constructor(
             val allSeasons = mutableListOf<PortalVodItem>()
             var currentPage = 1
             var totalItems = Int.MAX_VALUE
-
             while (allSeasons.size < totalItems) {
                 val url = buildLoadUrl("action=get_ordered_list&type=vod&movie_id=$movieId&p=$currentPage")
                 val response = api.getVodList(url)
-
                 totalItems = response.js.totalItems.toIntOrNull() ?: 0
                 val items = response.js.data.orEmpty().map { it.toDomain("series") }
                 allSeasons.addAll(items)
-
                 if (items.isEmpty() || allSeasons.size >= totalItems) break
                 currentPage++
             }
-
             allSeasons
         }
     }
@@ -453,19 +437,15 @@ class StalkerPortalService @Inject constructor(
             val allEpisodes = mutableListOf<PortalVodItem>()
             var currentPage = 1
             var totalItems = Int.MAX_VALUE
-
             while (allEpisodes.size < totalItems) {
                 val url = buildLoadUrl("action=get_ordered_list&type=vod&movie_id=$movieId&season_id=$seasonId&p=$currentPage")
                 val response = api.getVodList(url)
-
                 totalItems = response.js.totalItems.toIntOrNull() ?: 0
                 val items = response.js.data.orEmpty().map { it.toDomain("series") }
                 allEpisodes.addAll(items)
-
                 if (items.isEmpty() || allEpisodes.size >= totalItems) break
                 currentPage++
             }
-
             allEpisodes
         }
     }

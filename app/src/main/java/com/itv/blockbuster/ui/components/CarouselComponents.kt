@@ -27,9 +27,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -62,7 +64,10 @@ import com.itv.blockbuster.ui.theme.BbTextSecondary
 data class HomeRow(
     val id: String,
     val title: String,
-    val items: List<PortalVodItem>
+    val items: List<PortalVodItem>,
+    val currentPage: Int = 1,
+    val hasMore: Boolean = true,
+    val isLoadingPage: Boolean = false
 )
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -70,7 +75,7 @@ data class HomeRow(
 fun PosterCard(
     item: PortalVodItem,
     isFavorite: Boolean = false,
-    progressRatio: Float = 0f, // NEW: Progress ratio 0.0 to 1.0
+    progressRatio: Float = 0f,
     onClick: () -> Unit = {},
     onLongClick: () -> Unit = {},
     onFavoriteIconClick: () -> Unit = {},
@@ -123,7 +128,6 @@ fun PosterCard(
                 )
             }
         }
-
         if (actionIcon != null) {
             Box(
                 modifier = Modifier
@@ -143,8 +147,6 @@ fun PosterCard(
                 )
             }
         }
-
-        // Favorite Icon Overlay
         Box(
             modifier = Modifier
                 .align(Alignment.TopEnd)
@@ -161,7 +163,6 @@ fun PosterCard(
                 modifier = Modifier.padding(6.dp)
             )
         }
-
         if (item.logoUrl.isNotEmpty()) {
             Box(
                 modifier = Modifier
@@ -183,8 +184,6 @@ fun PosterCard(
                 )
             }
         }
-
-        // NEW: Netflix-style progress bar at the very bottom
         if (progressRatio > 0f) {
             Box(
                 modifier = Modifier
@@ -210,10 +209,11 @@ fun PosterCard(
 fun CarouselRow(
     row: HomeRow,
     favoriteIds: Set<String> = emptySet(),
-    progressMap: Map<String, PlaybackProgressEntity> = emptyMap(), // NEW
+    progressMap: Map<String, PlaybackProgressEntity> = emptyMap(),
     onItemClick: (PortalVodItem) -> Unit = {},
     onItemLongClick: (PortalVodItem) -> Unit = {},
-    onFavoriteIconClick: (PortalVodItem) -> Unit = {}
+    onFavoriteIconClick: (PortalVodItem) -> Unit = {},
+    onLoadMore: () -> Unit = {}
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(
@@ -232,21 +232,42 @@ fun CarouselRow(
                 val ratio = if (progress != null && progress.durationMs > 0) {
                     (progress.positionMs.toFloat() / progress.durationMs.toFloat()).coerceIn(0f, 1f)
                 } else 0f
-
                 PosterCard(
                     item = item,
                     isFavorite = favoriteIds.contains(item.id),
-                    progressRatio = ratio, // NEW
+                    progressRatio = ratio,
                     onClick = { onItemClick(item) },
                     onLongClick = { onItemLongClick(item) },
                     onFavoriteIconClick = { onFavoriteIconClick(item) }
                 )
             }
+
+            // Horizontal Pagination Trigger
+            if (row.hasMore) {
+                item {
+                    LaunchedEffect(Unit) { onLoadMore() }
+                    Box(
+                        modifier = Modifier
+                            .width(140.dp)
+                            .aspectRatio(2f / 3f)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(BbCard),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (row.isLoadingPage) {
+                            CircularProgressIndicator(
+                                color = BbAccent,
+                                strokeWidth = 2.dp,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }
 
-// ... HeroBanner remains unchanged ...
 @Composable
 fun HeroBanner(hero: PortalVodItem?) {
     val formFactor = rememberFormFactor()

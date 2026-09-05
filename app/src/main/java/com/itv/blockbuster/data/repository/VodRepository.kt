@@ -24,20 +24,24 @@ class VodRepository @Inject constructor(
     private val recentDao: RecentDao
 ) {
     suspend fun getCategories(): Result<List<PortalCategory>> = portalService.fetchVodCategories()
+
+    // FIX: Preserve original totalItems from the server to enable accurate pagination logic
     suspend fun getList(contentType: String, categoryId: String, page: Int, pageSize: Int = 20): Result<PortalPage<PortalVodItem>> {
         val result = portalService.fetchVodList(categoryId, page, pageSize)
         return result.map { vodPage ->
             val filteredItems = if (contentType == "series") vodPage.items.filter { it.isSeries } else vodPage.items.filter { !it.isSeries }
-            PortalPage(filteredItems, filteredItems.size)
+            PortalPage(filteredItems, vodPage.totalItems)
         }
     }
+
     suspend fun search(contentType: String, query: String, categoryId: String, page: Int): Result<PortalPage<PortalVodItem>> {
         val result = portalService.fetchVodSearch(query, categoryId, page)
         return result.map { vodPage ->
             val filteredItems = if (contentType == "series") vodPage.items.filter { it.isSeries } else vodPage.items.filter { !it.isSeries }
-            PortalPage(filteredItems, filteredItems.size)
+            PortalPage(filteredItems, vodPage.totalItems)
         }
     }
+
     suspend fun createStreamLink(cmd: String, type: String = "vod", series: String = ""): Result<String> = portalService.createStreamLink(cmd, type, series)
     suspend fun getMovieFileId(movieId: String): Result<String> = portalService.getMovieFileId(movieId)
     suspend fun getSeasons(movieId: String): Result<List<PortalVodItem>> = portalService.getSeasons(movieId)
@@ -65,20 +69,16 @@ class VodRepository @Inject constructor(
             ))
         }
     }
+
     suspend fun removeFavorite(profileId: Int, serverId: Int, itemId: String) = favoriteDao.removeFavorite(profileId, serverId, itemId)
 
-    // ── PROGRESS LOOKUP PATHS ──
     suspend fun getProgress(profileId: Int, serverId: Int, videoId: String): PlaybackProgressEntity? = progressDao.getProgress(profileId, serverId, videoId)
-
     suspend fun getMovieProgressByMovieId(profileId: Int, serverId: Int, movieId: String): PlaybackProgressEntity? =
         progressDao.getMovieProgressByMovieId(profileId, serverId, movieId)
-
     suspend fun getProgressForEpisode(profileId: Int, serverId: Int, movieId: String, seasonId: String, episodeId: String): PlaybackProgressEntity? =
         progressDao.getProgressForEpisode(profileId, serverId, movieId, seasonId, episodeId)
-
     suspend fun getProgressForMovie(profileId: Int, serverId: Int, movieId: String): List<PlaybackProgressEntity> =
         progressDao.getProgressForMovie(profileId, serverId, movieId)
-
     fun getRecentProgress(profileId: Int, serverId: Int): Flow<List<PlaybackProgressEntity>> = progressDao.getRecentProgress(profileId, serverId)
 
     suspend fun saveProgress(

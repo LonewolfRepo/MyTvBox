@@ -12,6 +12,7 @@ import com.itv.blockbuster.data.session.StalkerSessionManager
 import com.itv.blockbuster.domain.model.PortalChannel
 import com.itv.blockbuster.domain.model.PortalVodItem
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -21,6 +22,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+@OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class FavoritesHubViewModel @Inject constructor(
     private val favoriteDao: FavoriteDao,
@@ -61,8 +63,6 @@ class FavoritesHubViewModel @Inject constructor(
                 _favoriteIds.value = (vodFavs + seriesFavs + liveFavs).map { it.itemId }.toSet()
                 _movieItems.value = vodFavs.map { it.toPortalItem(isSeries = false) }
                 _seriesItems.value = seriesFavs.map { it.toPortalItem(isSeries = true) }
-
-                // FIX: Build channels straight from DB records — instant, no network
                 _liveChannels.value = liveFavs.map { it.toChannel() }
             }
         }
@@ -73,22 +73,44 @@ class FavoritesHubViewModel @Inject constructor(
             }.flatMapLatest { (p, s) ->
                 vodRepository.getRecentProgress(p, s)
             }.collect { list ->
-                _progressMap.value = list.associateBy { it.videoId }
+                _progressMap.value = list.sortedByDescending { it.timestamp }.associateBy { it.movieId }
             }
         }
     }
 
     private fun FavoriteEntity.toChannel() = PortalChannel(
-        id = itemId, name = title, number = "", cmd = cmd, logoUrl = logoUrl,
-        genreId = categoryId, nowPlaying = "", hasArchive = false, archiveDuration = 0, isCensored = false
+        id = itemId,
+        name = title,
+        number = "",
+        cmd = cmd,
+        logoUrl = logoUrl,
+        genreId = categoryId,
+        nowPlaying = "",
+        hasArchive = false,
+        archiveDuration = 0,
+        isCensored = false
     )
 
     private fun FavoriteEntity.toPortalItem(isSeries: Boolean) = PortalVodItem(
-        id = itemId, name = title, cmd = cmd, logoUrl = logoUrl, description = description,
-        director = director, actors = actors, year = year, duration = duration,
-        ratingImdb = ratingImdb, ratingMpaa = ratingMpaa, age = age, addedDate = addedDate,
-        categoryId = categoryId, contentType = if (isSeries) "series" else "vod",
-        genres = genres, country = country, movieId = itemId, isSeries = isSeries
+        id = itemId,
+        name = title,
+        cmd = cmd,
+        logoUrl = logoUrl,
+        description = description,
+        director = director,
+        actors = actors,
+        year = year,
+        duration = duration,
+        ratingImdb = ratingImdb,
+        ratingMpaa = ratingMpaa,
+        age = age,
+        addedDate = addedDate,
+        categoryId = categoryId,
+        contentType = if (isSeries) "series" else "vod",
+        genres = genres,
+        country = country,
+        movieId = itemId,
+        isSeries = isSeries
     )
 
     fun toggleFavorite(item: PortalVodItem) {

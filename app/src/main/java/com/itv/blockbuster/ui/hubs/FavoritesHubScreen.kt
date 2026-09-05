@@ -61,13 +61,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-data class HubUiState(
-    val rows: List<HubRow> = emptyList(),
-    val hero: HubItem? = null,
-    val profileId: Int = -1,
-    val serverId: Int = 0
-)
-
 @Composable
 fun FavoritesHubScreen(
     onPlayLive: (String, String) -> Unit,
@@ -79,7 +72,6 @@ fun FavoritesHubScreen(
     val liveChannels by viewModel.liveChannels.collectAsState()
     val favoriteIds by viewModel.favoriteIds.collectAsState()
     val progressMap by viewModel.progressMap.collectAsState()
-
 
     Box(modifier = Modifier.fillMaxSize().background(BbBackground)) {
         if (movieItems.isEmpty() && seriesItems.isEmpty() && liveChannels.isEmpty()) {
@@ -99,7 +91,6 @@ fun FavoritesHubScreen(
             }
         } else {
             LazyColumn(modifier = Modifier.fillMaxSize()) {
-                // Live TV channels
                 if (liveChannels.isNotEmpty()) {
                     item {
                         Text(
@@ -118,7 +109,6 @@ fun FavoritesHubScreen(
                             items(liveChannels, key = { it.id }) { channel ->
                                 ChannelTile(
                                     channel = channel,
-
                                     isFavorite = favoriteIds.contains(channel.id),
                                     onClick = {
                                         viewModel.getStreamUrl(channel.cmd) { url ->
@@ -133,7 +123,6 @@ fun FavoritesHubScreen(
                     }
                 }
 
-                // Movies carousel
                 if (movieItems.isNotEmpty()) {
                     item {
                         Text(
@@ -145,18 +134,19 @@ fun FavoritesHubScreen(
                         )
                     }
                     item {
-                        LazyRow(contentPadding = PaddingValues(horizontal = 24.dp), horizontalArrangement = Arrangement.spacedBy(12.dp))
-
-                         {
+                        LazyRow(
+                            contentPadding = PaddingValues(horizontal = 24.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
                             items(movieItems, key = { it.id }) { item ->
-                                val progress = progressMap[item.id]
-                                val ratio = if (progress != null && progress.durationMs > 0) {
-                                    (progress.positionMs.toFloat() / progress.durationMs.toFloat()).coerceIn(0f, 1f)
-                                }  else 0f
+                                val progressRatio = progressMap[item.id]?.let {
+                                    if (it.durationMs > 0) (it.positionMs.toFloat() / it.durationMs.toFloat()).coerceIn(0f, 1f) else 0f
+                                } ?: 0f
+
                                 PosterCard(
                                     item = item,
                                     isFavorite = favoriteIds.contains(item.id),
-                                    progressRatio = ratio, // NEW
+                                    progressRatio = progressRatio,
                                     onClick = {
                                         VodNavigationCache.currentItem = item
                                         val type = item.contentType.ifEmpty { if (item.isSeries) "series" else "vod" }
@@ -170,7 +160,6 @@ fun FavoritesHubScreen(
                     }
                 }
 
-                // TV Shows carousel
                 if (seriesItems.isNotEmpty()) {
                     item {
                         Text(
@@ -187,14 +176,14 @@ fun FavoritesHubScreen(
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             items(seriesItems, key = { it.id }) { item ->
-                                val progress = progressMap[item.id]
-                                val ratio = if (progress != null && progress.durationMs > 0) {
-                                    (progress.positionMs.toFloat() / progress.durationMs.toFloat()).coerceIn(0f, 1f)
-                                } else 0f
+                                val progressRatio = progressMap[item.id]?.let {
+                                    if (it.durationMs > 0) (it.positionMs.toFloat() / it.durationMs.toFloat()).coerceIn(0f, 1f) else 0f
+                                } ?: 0f
+
                                 PosterCard(
                                     item = item,
                                     isFavorite = favoriteIds.contains(item.id),
-                                    progressRatio = ratio, // NEW
+                                    progressRatio = progressRatio,
                                     onClick = {
                                         VodNavigationCache.currentItem = item
                                         val type = item.contentType.ifEmpty { "series" }
@@ -209,52 +198,6 @@ fun FavoritesHubScreen(
                 }
                 item { Spacer(Modifier.height(32.dp)) }
             }
-        }
-    }
-}
-
-// =====================================================================
-// SHARED HUB LAYOUT
-// =====================================================================
-@Composable
-fun UnifiedHubScreen(
-    rows: List<HubRow>,
-    hero: HubItem?,
-    emptyIcon: @Composable () -> Unit,
-    emptyText: String,
-    onItemClicked: (HubItem) -> Unit,
-    onItemFocused: (HubItem) -> Unit,
-    onClearAll: () -> Unit
-) {
-    Box(modifier = Modifier.fillMaxSize().background(BbBackground)) {
-        if (rows.isEmpty()) {
-            Column(
-                modifier = Modifier.align(Alignment.Center),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                emptyIcon()
-                Text(emptyText, color = BbTextMuted, fontSize = 15.sp)
-            }
-        } else {
-            LazyColumn(modifier = Modifier.fillMaxSize()) {
-                if (hero != null || rows.isNotEmpty()) {
-                    item(key = "hero") { HubHero(hero) }
-                }
-                items(rows, key = { it.id }) { row ->
-                    HubRowComposable(
-                        row = row,
-                        onItemClicked = onItemClicked,
-                        onItemFocused = onItemFocused
-                    )
-                }
-                item { Box(Modifier.padding(32.dp)) }
-            }
-        }
-        IconButton(
-            onClick = onClearAll,
-            modifier = Modifier.align(Alignment.TopEnd).padding(16.dp)
-        ) {
-            Icon(Icons.Default.Delete, "Clear all", tint = BbDestructive)
         }
     }
 }

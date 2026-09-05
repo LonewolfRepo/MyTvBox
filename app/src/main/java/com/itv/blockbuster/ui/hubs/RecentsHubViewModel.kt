@@ -12,6 +12,7 @@ import com.itv.blockbuster.data.session.StalkerSessionManager
 import com.itv.blockbuster.domain.model.PortalChannel
 import com.itv.blockbuster.domain.model.PortalVodItem
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -21,6 +22,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+@OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class RecentsHubViewModel @Inject constructor(
     private val recentRepository: RecentRepository,
@@ -52,7 +54,6 @@ class RecentsHubViewModel @Inject constructor(
             combine(prefs.activeProfileIdFlow, session.activePortal) { p, sp ->
                 Pair(p, sp?.serverId ?: 0)
             }.flatMapLatest { (p, s) ->
-                // FIX: Combine ALL favorite types (LIVE + VOD + SERIES)
                 combine(
                     recentRepository.getRecents(p, s),
                     liveTvRepository.getFavorites(p, s, "LIVE"),
@@ -77,7 +78,7 @@ class RecentsHubViewModel @Inject constructor(
             }.flatMapLatest { (p, s) ->
                 vodRepository.getRecentProgress(p, s)
             }.collect { list ->
-                _progressMap.value = list.associateBy { it.videoId }
+                _progressMap.value = list.sortedByDescending { it.timestamp }.associateBy { it.movieId }
             }
         }
     }
@@ -138,7 +139,6 @@ class RecentsHubViewModel @Inject constructor(
         viewModelScope.launch {
             val p = prefs.activeProfileIdFlow.first()
             val s = session.activePortal.value?.serverId ?: 0
-            // Explicitly pass "SERIES" or "VOD" to ensure correct DB mapping
             val type = if (item.isSeries) "SERIES" else "VOD"
             vodRepository.toggleFavorite(p, s, item, type)
         }

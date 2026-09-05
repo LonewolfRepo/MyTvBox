@@ -80,21 +80,25 @@ class VodDetailViewModel @Inject constructor(
         }
     }
 
+    // FIX: Use getMovieProgressByMovieId instead of getProgress
+    // getProgress queries by videoId (file ID), but item.id is the movie's display ID
     private fun loadMovieProgress(item: PortalVodItem) {
         viewModelScope.launch {
             val profileId = prefs.activeProfileIdFlow.first()
             val serverId = sessionManager.activePortal.value?.serverId ?: 0
-            val progress = vodRepository.getProgress(profileId, serverId, item.id)
+            val progress = vodRepository.getMovieProgressByMovieId(profileId, serverId, item.id)
             _state.update { it.copy(movieProgress = progress) }
         }
     }
 
+    // FIX: Key by episodeId instead of videoId
+    // The UI looks up by episode.id, so the map must be keyed by episodeId
     private fun loadEpisodesProgress(movieId: String) {
         viewModelScope.launch {
             val profileId = prefs.activeProfileIdFlow.first()
             val serverId = sessionManager.activePortal.value?.serverId ?: 0
             val progressList = vodRepository.getProgressForMovie(profileId, serverId, movieId)
-            _state.update { it.copy(episodeProgressMap = progressList.associateBy { p -> p.videoId }) }
+            _state.update { it.copy(episodeProgressMap = progressList.associateBy { p -> p.episodeId }) }
         }
     }
 
