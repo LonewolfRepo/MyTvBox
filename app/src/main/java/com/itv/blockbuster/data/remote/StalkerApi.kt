@@ -8,6 +8,7 @@ import com.itv.blockbuster.data.remote.dto.EpgWeekResponse
 import com.itv.blockbuster.data.remote.dto.HandshakeResponse
 import com.itv.blockbuster.data.remote.dto.ProfileResponse
 import com.itv.blockbuster.data.remote.dto.VodListResponse
+import com.itv.blockbuster.data.remote.dto.WatchdogResponse
 import retrofit2.http.GET
 import retrofit2.http.Url
 
@@ -45,4 +46,8 @@ interface StalkerApi {
 
     @GET
     suspend fun getEpgWeek(@Url url: String): EpgWeekResponse
+
+    // NEW: Watchdog keep-alive endpoint
+    @GET
+    suspend fun sendWatchdog(@Url url: String): WatchdogResponse
 }

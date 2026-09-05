@@ -139,6 +139,15 @@ class StalkerPortalService @Inject constructor(
     }
 
     // =====================================================================
+    // WATCHDOG
+    // =====================================================================
+
+    suspend fun sendWatchdog(): Result<Unit> = safe {
+        val url = buildLoadUrl("type=watchdog&action=get_events&cur_play_type=0&event_active_id=0&init=0&JsHttpRequest=1-xml")
+        api.sendWatchdog(url)
+    }
+
+    // =====================================================================
     // LIVE TV
     // =====================================================================
 

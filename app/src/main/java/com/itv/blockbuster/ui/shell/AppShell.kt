@@ -48,6 +48,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.currentBackStackEntryAsState
 import com.itv.blockbuster.ui.navigation.AppSection
@@ -87,6 +88,9 @@ fun AppShell(
     navController: NavHostController,
     content: @Composable () -> Unit
 ) {
+    // Inject AppShellViewModel to activate watchdog lifecycle management
+    hiltViewModel<AppShellViewModel>()
+
     val formFactor = rememberFormFactor()
     val currentRoute =
         navController.currentBackStackEntryAsState().value?.destination?.route
@@ -233,7 +237,6 @@ private fun PortraitShell(
     content: @Composable () -> Unit
 ) {
     var menuOpen by remember { mutableStateOf(false) }
-
     val currentLabel = when (currentRoute) {
         Routes.PROFILE_HUB -> "Profile"
         Routes.SETTINGS -> "Settings"
@@ -282,7 +285,6 @@ private fun PortraitShell(
         // Content + overlay menu
         Box(modifier = Modifier.weight(1f)) {
             content()
-
             if (menuOpen) {
                 OverlayMenu(
                     currentRoute = currentRoute,
@@ -368,9 +370,7 @@ private fun OverlayMenu(
                     .padding(horizontal = 32.dp, vertical = 14.dp)
             )
         }
-
         Spacer(modifier = Modifier.height(24.dp))
-
         Box(
             modifier = Modifier
                 .size(52.dp)

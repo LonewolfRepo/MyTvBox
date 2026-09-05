@@ -140,3 +140,8 @@ data class EpgDayDto(
     @SerialName("f_mysql") val fMysql: String = "",
     val today: Int = 0
 )
+@Serializable
+data class WatchdogResponse(val js: WatchdogData = WatchdogData()) {
+    @Serializable
+    data class WatchdogData(val status: String = "")
+}

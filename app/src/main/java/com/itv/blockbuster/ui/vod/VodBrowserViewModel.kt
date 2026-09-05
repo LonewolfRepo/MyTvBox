@@ -156,8 +156,12 @@ class VodBrowserViewModel @Inject constructor(
         _state.update { it.copy(isLoading = false, rows = rows) }
     }
 
+    // ── FIX 1: Disable vertical pagination when a specific category is selected ──
     fun selectCategory(category: PortalCategory) {
         _state.update { it.copy(selectedCategory = category, searchQuery = "") }
+        if (category.id != "*" && category.id != "0") {
+            _hasMoreCategories.value = false
+        }
         viewModelScope.launch { loadContent(category) }
     }
 
@@ -169,18 +173,24 @@ class VodBrowserViewModel @Inject constructor(
         }
     }
 
+    // ── FIX 2: Derive isAllCategories and assign to _hasMoreCategories ──
     private suspend fun loadContent(category: PortalCategory, search: String = "") {
         _state.update { it.copy(isLoading = true) }
         try {
             if (search.isNotBlank()) {
                 val result = vodRepository.search(_contentType, search, category.id, 1)
                 val page = result.getOrDefault(PortalPage(emptyList(), 0))
+                _hasMoreCategories.value = false
                 _state.update {
                     it.copy(isLoading = false, rows = listOf(HomeRow("search", "Search Results", page.items, hasMore = false)))
                 }
                 return
             }
-            val catsToLoad = if (category.id == "*" || category.id == "0") {
+
+            val isAllCategories = category.id == "*" || category.id == "0"
+            _hasMoreCategories.value = isAllCategories
+
+            val catsToLoad = if (isAllCategories) {
                 _visibleCategories.value
             } else {
                 listOf(category)
@@ -200,8 +210,13 @@ class VodBrowserViewModel @Inject constructor(
         }
     }
 
+    // ── FIX 3: Guard — only proceed if currently in "All Categories" mode ──
     fun loadMoreCategories() {
         if (_isLoadingMoreCategories.value || !_hasMoreCategories.value) return
+
+        val selectedCat = _state.value.selectedCategory
+        if (selectedCat == null || (selectedCat.id != "*" && selectedCat.id != "0")) return
+
         viewModelScope.launch {
             _isLoadingMoreCategories.value = true
             val currentSize = _visibleCategories.value.size
