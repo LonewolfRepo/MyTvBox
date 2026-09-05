@@ -268,7 +268,7 @@ class StalkerPortalService @Inject constructor(
         // FIX: Removed page_offset. Server dictates max_page_items and handles offset automatically via 'p'
         // The Stalker API uses "genre" parameter for VOD category filtering
         val params = "action=get_ordered_list&type=$type&sortby=added" +
-                "&genre=$category&p=$page&video=all$searchParam"
+                "&category=$category&p=$page&video=all$searchParam"
         val response = api.getVodList(buildLoadUrl(params))
         val items = response.js.data.orEmpty().map { it.toDomain(type) }
         return PortalPage(items, response.js.totalItems.toIntOrNull() ?: items.size)
