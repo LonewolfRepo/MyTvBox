@@ -2,6 +2,7 @@ package com.itv.blockbuster.di
 
 import com.itv.blockbuster.data.remote.StalkerApi
 import com.itv.blockbuster.data.remote.StalkerInterceptor
+import com.itv.blockbuster.data.session.ReauthManager
 import com.itv.blockbuster.data.session.StalkerSessionManager
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
 import dagger.Module
@@ -20,7 +21,6 @@ import javax.inject.Singleton
 @Module
 @InstallIn(SingletonComponent::class)
 object NetworkModule {
-
     @Provides
     @Singleton
     fun provideJson(): Json = Json {
@@ -33,21 +33,20 @@ object NetworkModule {
     @Provides
     @Singleton
     fun provideOkHttpClient(
-        sessionManager: StalkerSessionManager
+        sessionManager: StalkerSessionManager,
+        reauthManager: ReauthManager
     ): OkHttpClient {
         val logging = HttpLoggingInterceptor().apply {
             // Keep NONE on TV hardware; switch to HEADERS when debugging portals.
             level = HttpLoggingInterceptor.Level.NONE
         }
-
         val dispatcher = Dispatcher().apply {
             maxRequests = 64
             maxRequestsPerHost = 8
         }
-
         return OkHttpClient.Builder()
             .dispatcher(dispatcher)
-            .addInterceptor(StalkerInterceptor(sessionManager))
+            .addInterceptor(StalkerInterceptor(sessionManager, reauthManager))
             .addInterceptor(logging)
             .connectTimeout(20, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
