@@ -1,9 +1,9 @@
 package com.itv.blockbuster.ui.components
 
 import androidx.compose.animation.core.AnimationSpec
-import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -81,17 +81,11 @@ data class HomeRow(
 
 /**
  * A Netflix-style horizontal carousel that locks focus to a specific left-anchored coordinate.
- *
- * MATHEMATICAL ANCHORING:
- * - Calculates a 20% peek buffer for the previous card.
- * - Locks the focused item's left edge exactly to [focusAnchorLine].
- * - Uses native [contentPadding] to guarantee the last item can scroll into the anchor
- *   without the focus box breaking away (runway run-out protection).
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun <T> NetflixStyleCarousel(
-    items: List<T>,
+    data: List<T>, // FIX: Renamed from 'items' to 'data' to prevent shadowing LazyListScope.items()
     collapsedMenuWidth: Dp = 0.dp,
     itemWidth: Dp,
     itemSpacing: Dp,
@@ -103,33 +97,20 @@ fun <T> NetflixStyleCarousel(
     val screenWidth = configuration.screenWidthDp.dp
     val density = LocalDensity.current
 
-    // 1. PEEK BUFFER & ANCHOR MATHEMATICS
-    // We want exactly 20% of the previous card to be visible on the left.
     val peekWidth = itemWidth * 0.20f
-
-    // The anchor line is where the LEFT EDGE of the focused item will land.
-    // It needs to be far enough right to show the peekWidth of the previous item, plus the spacing.
-    // (We DO NOT add collapsedMenuWidth here because the LazyRow is already placed next to the nav rail).
     val focusAnchorLine = peekWidth + itemSpacing
-
-    // The actual width available to the LazyRow is the screen width minus the nav rail.
     val lazyRowWidth = screenWidth - collapsedMenuWidth
-
-    // End padding ensures the last item can scroll perfectly into the focus anchor line.
     val endPadding = (lazyRowWidth - focusAnchorLine - itemWidth).coerceAtLeast(0.dp)
-
     val focusAnchorLinePx = with(density) { focusAnchorLine.toPx() }
 
-    // 2. CUSTOM BRING INTO VIEW SPEC (Stable API 1.7.0+)
     val customSpec = remember(focusAnchorLinePx) {
         object : BringIntoViewSpec {
+            override val scrollAnimationSpec: AnimationSpec<Float> =
+                spring(stiffness = Spring.StiffnessHigh)
+
             override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float {
-                // 'offset' is the item's current leading edge relative to the viewport's leading edge.
-                // We want the item's leading edge to land exactly at focusAnchorLinePx.
                 return offset - focusAnchorLinePx
             }
-
-            override val scrollAnimationSpec: AnimationSpec<Float> = tween(durationMillis = 300, easing = FastOutSlowInEasing)
         }
     }
 
@@ -143,7 +124,7 @@ fun <T> NetflixStyleCarousel(
             horizontalArrangement = Arrangement.spacedBy(itemSpacing),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            items(items) { item ->
+            items(data) { item -> // FIX: Now correctly resolves to LazyListScope.items()
                 itemContent(item)
             }
             if (trailingContent != null) {
@@ -310,7 +291,7 @@ fun CarouselRow(
             modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 8.dp)
         )
         NetflixStyleCarousel(
-            items = row.items,
+            data = row.items, // FIX: Updated parameter name to match NetflixStyleCarousel signature
             collapsedMenuWidth = collapsedMenuWidth,
             itemWidth = 140.dp,
             itemSpacing = 12.dp,

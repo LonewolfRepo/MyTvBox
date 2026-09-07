@@ -64,6 +64,7 @@ fun ChannelTile(
 ) {
     var focused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(targetValue = if (focused) 1.05f else 1f, label = "channelScale")
+
     Box(
         modifier = modifier
             .aspectRatio(1f)
@@ -92,6 +93,7 @@ fun ChannelTile(
                 Text(text = channel.nowPlaying, color = BbTextSecondary, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp))
             }
         }
+
         // Favorite Icon Overlay
         Box(
             modifier = Modifier
@@ -127,9 +129,8 @@ fun ChannelCarouselRow(
 
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(text = title, color = BbTextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 8.dp))
-
         NetflixStyleCarousel(
-            items = channels,
+            data = channels, // FIX: renamed from 'items' to 'data'
             collapsedMenuWidth = collapsedMenuWidth,
             itemWidth = 160.dp,
             itemSpacing = 12.dp
@@ -181,6 +182,7 @@ fun ChannelListItem(
                 Text(text = channel.nowPlaying, color = BbTextSecondary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
+
         // Favorite Icon Overlay
         Box(
             modifier = Modifier

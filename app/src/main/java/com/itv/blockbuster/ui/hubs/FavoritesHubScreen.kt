@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -106,7 +105,7 @@ fun FavoritesHubScreen(
                     }
                     item {
                         NetflixStyleCarousel(
-                            items = liveChannels,
+                            data = liveChannels, // FIX: renamed from 'items' to 'data'
                             collapsedMenuWidth = collapsedMenuWidth,
                             itemWidth = 160.dp,
                             itemSpacing = 12.dp
@@ -114,7 +113,7 @@ fun FavoritesHubScreen(
                             ChannelTile(
                                 channel = channel,
                                 isFavorite = favoriteIds.contains(channel.id),
-                                modifier = Modifier.width(160.dp),
+                                modifier = Modifier.size(160.dp),
                                 onClick = {
                                     viewModel.getStreamUrl(channel.cmd) { url ->
                                         if (url.isNotEmpty()) onPlayLive(url, channel.id)
@@ -126,7 +125,6 @@ fun FavoritesHubScreen(
                         }
                     }
                 }
-
                 if (movieItems.isNotEmpty()) {
                     item {
                         Text(
@@ -139,7 +137,7 @@ fun FavoritesHubScreen(
                     }
                     item {
                         NetflixStyleCarousel(
-                            items = movieItems,
+                            data = movieItems, // FIX: renamed from 'items' to 'data'
                             collapsedMenuWidth = collapsedMenuWidth,
                             itemWidth = 140.dp,
                             itemSpacing = 12.dp
@@ -147,7 +145,6 @@ fun FavoritesHubScreen(
                             val progressRatio = progressMap[item.id]?.let {
                                 if (it.durationMs > 0) (it.positionMs.toFloat() / it.durationMs.toFloat()).coerceIn(0f, 1f) else 0f
                             } ?: 0f
-
                             PosterCard(
                                 item = item,
                                 isFavorite = favoriteIds.contains(item.id),
@@ -163,7 +160,6 @@ fun FavoritesHubScreen(
                         }
                     }
                 }
-
                 if (seriesItems.isNotEmpty()) {
                     item {
                         Text(
@@ -176,7 +172,7 @@ fun FavoritesHubScreen(
                     }
                     item {
                         NetflixStyleCarousel(
-                            items = seriesItems,
+                            data = seriesItems, // FIX: renamed from 'items' to 'data'
                             collapsedMenuWidth = collapsedMenuWidth,
                             itemWidth = 140.dp,
                             itemSpacing = 12.dp
@@ -184,7 +180,6 @@ fun FavoritesHubScreen(
                             val progressRatio = progressMap[item.id]?.let {
                                 if (it.durationMs > 0) (it.positionMs.toFloat() / it.durationMs.toFloat()).coerceIn(0f, 1f) else 0f
                             } ?: 0f
-
                             PosterCard(
                                 item = item,
                                 isFavorite = favoriteIds.contains(item.id),

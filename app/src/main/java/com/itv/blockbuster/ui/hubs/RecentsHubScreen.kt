@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -69,7 +68,6 @@ fun RecentsHubScreen(
     val liveChannels by viewModel.liveChannels.collectAsState()
     val favoriteIds by viewModel.favoriteIds.collectAsState()
     val progressMap by viewModel.progressMap.collectAsState()
-
     var showClearDialog by remember { mutableStateOf(false) }
     var menuTarget by remember { mutableStateOf<MenuTarget?>(null) }
 
@@ -98,7 +96,7 @@ fun RecentsHubScreen(
                     item { Text("Recent Live TV", color = BbTextPrimary, fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 8.dp)) }
                     item {
                         NetflixStyleCarousel(
-                            items = liveChannels,
+                            data = liveChannels, // FIX: renamed from 'items' to 'data'
                             collapsedMenuWidth = collapsedMenuWidth,
                             itemWidth = 160.dp,
                             itemSpacing = 12.dp
@@ -107,7 +105,7 @@ fun RecentsHubScreen(
                                 ChannelTile(
                                     channel = channel,
                                     isFavorite = favoriteIds.contains(channel.id),
-                                    modifier = Modifier.width(160.dp),
+                                    modifier = Modifier.size(160.dp),
                                     onClick = { viewModel.getStreamUrl(channel.cmd) { url -> if (url.isNotEmpty()) onPlayLive(url, channel.id) } },
                                     onLongClick = { menuTarget = MenuTarget.Live(channel) },
                                     onFavoriteIconClick = { viewModel.toggleLiveFavorite(channel) }
@@ -144,12 +142,11 @@ fun RecentsHubScreen(
                         }
                     }
                 }
-
                 if (movieItems.isNotEmpty()) {
                     item { Text("Recent Movies", color = BbTextPrimary, fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 8.dp)) }
                     item {
                         NetflixStyleCarousel(
-                            items = movieItems,
+                            data = movieItems, // FIX: renamed from 'items' to 'data'
                             collapsedMenuWidth = collapsedMenuWidth,
                             itemWidth = 140.dp,
                             itemSpacing = 12.dp
@@ -158,7 +155,6 @@ fun RecentsHubScreen(
                                 val progressRatio = progressMap[item.id]?.let {
                                     if (it.durationMs > 0) (it.positionMs.toFloat() / it.durationMs.toFloat()).coerceIn(0f, 1f) else 0f
                                 } ?: 0f
-
                                 PosterCard(
                                     item = item,
                                     isFavorite = favoriteIds.contains(item.id),
@@ -203,12 +199,11 @@ fun RecentsHubScreen(
                         }
                     }
                 }
-
                 if (seriesItems.isNotEmpty()) {
                     item { Text("Recent TV Shows", color = BbTextPrimary, fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 8.dp)) }
                     item {
                         NetflixStyleCarousel(
-                            items = seriesItems,
+                            data = seriesItems, // FIX: renamed from 'items' to 'data'
                             collapsedMenuWidth = collapsedMenuWidth,
                             itemWidth = 140.dp,
                             itemSpacing = 12.dp
@@ -217,7 +212,6 @@ fun RecentsHubScreen(
                                 val progressRatio = progressMap[item.id]?.let {
                                     if (it.durationMs > 0) (it.positionMs.toFloat() / it.durationMs.toFloat()).coerceIn(0f, 1f) else 0f
                                 } ?: 0f
-
                                 PosterCard(
                                     item = item,
                                     isFavorite = favoriteIds.contains(item.id),
@@ -265,14 +259,12 @@ fun RecentsHubScreen(
                 item { Spacer(Modifier.height(32.dp)) }
             }
         }
-
         IconButton(
             onClick = { showClearDialog = true },
             modifier = Modifier.align(Alignment.TopEnd).padding(16.dp)
         ) {
             Icon(Icons.Default.Delete, "Clear all", tint = BbDestructive)
         }
-
         if (showClearDialog) {
             AlertDialog(
                 onDismissRequest = { showClearDialog = false },

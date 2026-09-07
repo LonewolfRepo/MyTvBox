@@ -49,6 +49,9 @@ import com.itv.blockbuster.ui.theme.BbSurface
 import com.itv.blockbuster.ui.theme.BbTextPrimary
 import com.itv.blockbuster.ui.theme.BbTextSecondary
 
+// =====================================================================
+// MODELS
+// =====================================================================
 data class HubItem(
     val id: String,
     val title: String,
@@ -77,6 +80,9 @@ fun formatRemaining(ms: Long): String {
     return if (h > 0) "${h}h ${m}m" else "${m}m"
 }
 
+// =====================================================================
+// CARD
+// =====================================================================
 @Composable
 fun HubCard(
     item: HubItem,
@@ -88,6 +94,7 @@ fun HubCard(
         targetValue = if (focused) 1.06f else 1f,
         label = "hubScale"
     )
+
     Box(
         modifier = Modifier
             .graphicsLayer { scaleX = scale; scaleY = scale }
@@ -207,6 +214,9 @@ fun HubCard(
     }
 }
 
+// =====================================================================
+// ROW
+// =====================================================================
 @Composable
 fun HubRowComposable(
     row: HubRow,
@@ -224,9 +234,8 @@ fun HubRowComposable(
             fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 8.dp)
         )
-
         NetflixStyleCarousel(
-            items = row.items,
+            data = row.items, // FIX: renamed from 'items' to 'data'
             collapsedMenuWidth = collapsedMenuWidth,
             itemWidth = 140.dp,
             itemSpacing = 12.dp
@@ -240,6 +249,9 @@ fun HubRowComposable(
     }
 }
 
+// =====================================================================
+// DYNAMIC HERO (TV)
+// =====================================================================
 @Composable
 fun HubHero(item: HubItem?) {
     Box(
