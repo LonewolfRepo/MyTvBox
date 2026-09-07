@@ -2,6 +2,7 @@ package com.itv.blockbuster.ui.home
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.itv.blockbuster.data.local.SettingsRepository
 import com.itv.blockbuster.data.local.UserPreferencesRepository
 import com.itv.blockbuster.data.local.entity.PlaybackProgressEntity
 import com.itv.blockbuster.data.repository.ConnectionRepository
@@ -14,6 +15,7 @@ import com.itv.blockbuster.domain.model.PortalPage
 import com.itv.blockbuster.domain.model.PortalVodItem
 import com.itv.blockbuster.domain.model.Server
 import com.itv.blockbuster.ui.components.HomeRow
+import com.itv.blockbuster.util.CategorySortHelper
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -46,9 +48,9 @@ class HomeViewModel @Inject constructor(
     private val portalService: StalkerPortalService,
     private val vodRepository: VodRepository,
     private val sessionManager: StalkerSessionManager,
-    private val prefs: UserPreferencesRepository
+    private val prefs: UserPreferencesRepository,
+    private val settings: SettingsRepository
 ) : ViewModel() {
-
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
@@ -63,8 +65,11 @@ class HomeViewModel @Inject constructor(
     private val _visibleCategories = MutableStateFlow<List<PortalCategory>>(emptyList())
     private val _hasMoreCategories = MutableStateFlow(true)
     private val _isLoadingMoreCategories = MutableStateFlow(false)
-
     val hasMoreCategories: StateFlow<Boolean> = _hasMoreCategories.asStateFlow()
+
+    // Signature of the "order_home" setting used by the last successful load.
+    // Used to detect Settings changes when the user navigates back to Home.
+    private var lastAppliedHomeOrder: String? = null
 
     init {
         viewModelScope.launch {
@@ -118,6 +123,21 @@ class HomeViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Called from HomeScreen ON_RESUME. Reloads Home only when the
+     * "Home Categories" sort/visibility setting changed since the last load.
+     */
+    fun reloadIfHomeOrderChanged() {
+        viewModelScope.launch {
+            val applied = lastAppliedHomeOrder ?: return@launch
+            if (!_uiState.value.isConnected) return@launch
+            val p = prefs.activeProfileIdFlow.firstOrNull() ?: return@launch
+            val s = sessionManager.activePortal.value?.serverId ?: 0
+            val rawOrder = settings.getString(p, s, "order_home", "")
+            if (rawOrder != applied) loadHome()
+        }
+    }
+
     private fun connectAndLoad(server: Server) {
         viewModelScope.launch {
             _uiState.update { it.copy(isConnecting = true, connectionError = null) }
@@ -143,15 +163,27 @@ class HomeViewModel @Inject constructor(
 
     private suspend fun loadHome() {
         _uiState.update { it.copy(isLoading = true) }
+        val p = prefs.activeProfileIdFlow.firstOrNull() ?: -1
+        val s = sessionManager.activePortal.value?.serverId ?: 0
+
+        // Read the Home category order/visibility setting and remember its signature
+        val rawOrder = settings.getString(p, s, "order_home", "")
+        lastAppliedHomeOrder = rawOrder
+
         val recentPage = portalService.fetchVodList(categoryId = "*", page = 1, pageSize = 15)
             .getOrDefault(PortalPage(emptyList(), 0))
         val categories = portalService.fetchVodCategories().getOrDefault(emptyList())
-        val rowCategories = categories.filter { it.id != "*" && it.id != "0" }
 
-        _allCategories.value = rowCategories
-        val initialBatch = rowCategories.take(5)
+        // Respect Home Category Settings:
+        //  - only categories marked visible are kept
+        //  - kept categories stay in the exact configured order
+        val orderedVisible = CategorySortHelper.applyToCategories(categories, rawOrder)
+            .filter { it.id != "*" && it.id != "0" }
+
+        _allCategories.value = orderedVisible
+        val initialBatch = orderedVisible.take(5)
         _visibleCategories.value = initialBatch
-        _hasMoreCategories.value = rowCategories.size > 5
+        _hasMoreCategories.value = orderedVisible.size > 5
 
         val categoryRows = coroutineScope {
             initialBatch.map { category ->
@@ -169,7 +201,21 @@ class HomeViewModel @Inject constructor(
             }.awaitAll().filter { it.items.isNotEmpty() }
         }
         val allRows = buildList {
-            if (recentPage.items.isNotEmpty()) add(HomeRow("recently_added", "Recently Added", recentPage.items, hasMore = false))
+            //if (recentPage.items.isNotEmpty()) add(HomeRow("recently_added", "Recently Added", recentPage.items, hasMore = false))
+            // FIX: "Recently Added" is no longer capped. It now carries real pagination
+            // state so the row keeps loading horizontally until the portal's full
+            // recent list is exhausted (limit removed).
+            if (recentPage.items.isNotEmpty()) {
+                add(
+                    HomeRow(
+                        id = "*",
+                        title = "Recently Added",
+                        items = recentPage.items,
+                        currentPage = 1,
+                        hasMore = recentPage.items.isNotEmpty()
+                    )
+                )
+            }
             addAll(categoryRows)
         }
         _uiState.update { it.copy(isLoading = false, hero = recentPage.items.firstOrNull(), rows = allRows) }
@@ -180,8 +226,8 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             _isLoadingMoreCategories.value = true
             val currentSize = _visibleCategories.value.size
+            // Continues in the configured order because _allCategories is ordered/filtered
             val nextBatch = _allCategories.value.drop(currentSize).take(5)
-
             val newRows = coroutineScope {
                 nextBatch.map { category ->
                     async(Dispatchers.IO) {
@@ -197,7 +243,6 @@ class HomeViewModel @Inject constructor(
                     }
                 }.awaitAll().filter { it.items.isNotEmpty() }
             }
-
             _visibleCategories.value = _visibleCategories.value + nextBatch
             _hasMoreCategories.value = _visibleCategories.value.size < _allCategories.value.size
             _uiState.update { it.copy(rows = it.rows + newRows) }
@@ -208,16 +253,14 @@ class HomeViewModel @Inject constructor(
     fun loadMoreRowItems(rowId: String) {
         val currentRow = _uiState.value.rows.find { it.id == rowId } ?: return
         if (currentRow.isLoadingPage || !currentRow.hasMore) return
-
         viewModelScope.launch {
             _uiState.update { state ->
                 state.copy(rows = state.rows.map { if (it.id == rowId) it.copy(isLoadingPage = true) else it })
             }
-
             val nextPage = currentRow.currentPage + 1
+            val categoryId = if (rowId == "*") "*" else rowId
             val page = portalService.fetchVodList(rowId, nextPage, 14)
                 .getOrDefault(PortalPage(emptyList(), 0))
-
             _uiState.update { state ->
                 state.copy(rows = state.rows.map {
                     if (it.id == rowId) {

@@ -32,6 +32,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -43,11 +44,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import coil.compose.AsyncImage
 import com.itv.blockbuster.data.local.entity.PlaybackProgressEntity
 import com.itv.blockbuster.domain.model.PortalVodItem
@@ -71,6 +75,18 @@ fun VodEpisodesScreen(
 ) {
     val state by viewModel.state.collectAsState()
     val isPortrait = rememberFormFactor() == FormFactor.MOBILE_PORTRAIT
+
+    // FIX: Refresh playback progress whenever we return from the player.
+    // Without this, episodeProgressMap stayed as loaded at first composition
+    // and progress bars never updated after watching an episode.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) viewModel.refreshProgress()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     Box(modifier = Modifier.fillMaxSize().background(BbBackground)) {
         val item = state.item
@@ -163,7 +179,6 @@ private fun LandscapeEpisodes(
                 )
             }
         }
-
         // Episodes column (right)
         LazyColumn(
             modifier = Modifier.weight(0.68f).fillMaxHeight()
@@ -228,7 +243,6 @@ private fun PortraitEpisodes(
                 }
             }
         }
-
         // Episodes list
         LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
             items(state.episodes, key = { it.id }) { episode ->
@@ -296,7 +310,6 @@ private fun EpisodeCard(
     val progressRatio = if (progress != null && progress.durationMs > 0) {
         (progress.positionMs.toFloat() / progress.durationMs.toFloat()).coerceIn(0f, 1f)
     } else 0f
-
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp)
             .clip(RoundedCornerShape(10.dp))
@@ -337,7 +350,6 @@ private fun EpisodeCard(
                     color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold
                 )
             }
-
             // Progress bar embedded inside thumbnail
             if (progressRatio > 0f) {
                 LinearProgressIndicator(

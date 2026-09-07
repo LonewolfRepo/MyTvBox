@@ -21,16 +21,20 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.itv.blockbuster.ui.components.CarouselRow
 import com.itv.blockbuster.ui.components.HeroBanner
 import com.itv.blockbuster.ui.theme.BbAccent
@@ -49,6 +53,19 @@ fun HomeScreen(
     val favoriteIds by viewModel.favoriteIds.collectAsState()
     val progressMap by viewModel.progressMap.collectAsState()
     val hasMoreCategories by viewModel.hasMoreCategories.collectAsState()
+
+    // Reload Home when returning from Settings if Home category
+    // visibility/order was changed while away.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.reloadIfHomeOrderChanged()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     Box(modifier = Modifier.fillMaxSize().background(BbBackground)) {
         when {
@@ -75,7 +92,6 @@ fun HomeScreen(
                         onLoadMore = { viewModel.loadMoreRowItems(row.id) }
                     )
                 }
-
                 // Vertical Pagination Trigger
                 if (hasMoreCategories) {
                     item {
@@ -94,7 +110,6 @@ fun HomeScreen(
                         }
                     }
                 }
-
                 item(key = "bottom_spacer") { Spacer(modifier = Modifier.height(32.dp)) }
             }
         }

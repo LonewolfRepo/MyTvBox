@@ -1,4 +1,5 @@
 package com.itv.blockbuster.ui.settings
+
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -19,10 +20,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -98,8 +97,8 @@ enum class SettingsMenu(val label: String, val icon: ImageVector, val destructiv
     CLEAR_DATA("Clear All User Data", Icons.Default.Delete, destructive = true)
 }
 
-private val HOME_PAGE_OPTIONS = listOf("LIVE_TV", "MOVIES", "TV_SHOWS", "TV_GUIDE", "FAVORITES", "RECENTS")
-private val MY_LIST_OPTIONS = listOf("ALL", "LIVE", "MOVIES", "SERIES")
+// RENAMED concept: landing page now includes HOME as the first (default) choice
+private val HOME_PAGE_OPTIONS = listOf("HOME", "LIVE_TV", "MOVIES", "TV_SHOWS", "TV_GUIDE", "FAVORITES", "RECENTS")
 private val ENGINE_OPTIONS = listOf("EXO", "VLC")
 private val TIMEZONE_OPTIONS = listOf("", "UTC", "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles", "Europe/London", "Europe/Paris", "Europe/Berlin", "Asia/Dubai", "Asia/Karachi", "Asia/Kolkata", "Asia/Shanghai", "Australia/Sydney")
 
@@ -133,13 +132,15 @@ fun SettingsScreen(onOpenPortals: () -> Unit, onLogout: () -> Unit, viewModel: S
 
     when (dialog) {
         "timezone" -> SelectDialog("Time Zone", TIMEZONE_OPTIONS.map { if (it.isEmpty()) "System default" else it }, if (state.timezone.isEmpty()) "System default" else state.timezone, onSelect = { label -> viewModel.setTimezone(if (label == "System default") "" else label); dialog = null }, onDismiss = { dialog = null })
-        "home" -> SelectDialog("Default Home Page", HOME_PAGE_OPTIONS, state.defaultHomePage, onSelect = { viewModel.setDefaultHomePage(it); dialog = null }, onDismiss = { dialog = null })
-        "mylist" -> SelectDialog("Default My List Page", MY_LIST_OPTIONS, state.defaultMyListPage, onSelect = { viewModel.setDefaultMyListPage(it); dialog = null }, onDismiss = { dialog = null })
+        "home" -> SelectDialog("Default Landing Page", HOME_PAGE_OPTIONS, state.defaultHomePage, onSelect = { viewModel.setDefaultHomePage(it); dialog = null }, onDismiss = { dialog = null })
         "player_live" -> SelectDialog("Live TV Player", ENGINE_OPTIONS, state.playerEngineLive, onSelect = { viewModel.setPlayerEngineLive(it); dialog = null }, onDismiss = { dialog = null })
         "player_vod" -> SelectDialog("VOD Player", ENGINE_OPTIONS, state.playerEngineVod, onSelect = { viewModel.setPlayerEngineVod(it); dialog = null }, onDismiss = { dialog = null })
+        // NEW: Home category sort & visibility dialog
+        "cats_home" -> SortableListDialog("Home Categories", state.homeSortItems, onSave = viewModel::saveHomeSort, onDismiss = { dialog = null })
         "cats_vod" -> SortableListDialog("Movie Categories", state.vodSortItems, onSave = viewModel::saveVodSort, onDismiss = { dialog = null })
         "cats_series" -> SortableListDialog("TV Show Categories", state.seriesSortItems, onSave = viewModel::saveSeriesSort, onDismiss = { dialog = null })
-        "cats_live" -> SortableListDialog("Live TV Categories", state.liveSortItems, onSave = viewModel::saveLiveSort, onDismiss = { dialog = null })"confirm_data" -> ConfirmDialog("Clear all user data?", "Favorites, recents and playback history for this profile on this portal will be removed.", onConfirm = { viewModel.clearAllUserData(); dialog = null }, onDismiss = { dialog = null })
+        "cats_live" -> SortableListDialog("Live TV Categories", state.liveSortItems, onSave = viewModel::saveLiveSort, onDismiss = { dialog = null })
+        "confirm_data" -> ConfirmDialog("Clear all user data?", "Favorites, recents and playback history for this profile on this portal will be removed.", onConfirm = { viewModel.clearAllUserData(); dialog = null }, onDismiss = { dialog = null })
         "diagnostic" -> InfoDialog("Diagnostic", "Host: ${state.diagHost.ifEmpty { "—" }}\nPortal path: ${state.diagPath}\nConnected: ${if (state.diagConnected) "Yes" else "No"}") { dialog = null }
     }
 }
@@ -174,11 +175,15 @@ private fun DetailPane(selected: SettingsMenu, state: SettingsUiState, viewModel
         SettingsMenu.ANIMATIONS -> ToggleRow("App Animations", state.appAnimations, viewModel::setAppAnimations)
         SettingsMenu.DATE_TIME -> ValueRow("Time Zone", state.timezone.ifEmpty { "System default" }) { openDialog("timezone") }
         SettingsMenu.CONTENT -> {
+            // NEW: Home screen category sort & visibility
+            ValueRow("Home Categories", "Sort & Display") { openDialog("cats_home") }
             ValueRow("Movie Categories", "Sort & Display") { openDialog("cats_vod") }
             ValueRow("TV Show Categories", "Sort & Display") { openDialog("cats_series") }
             ValueRow("Live TV Categories", "Sort & Display") { openDialog("cats_live") }
-            ValueRow("Default Home Page", state.defaultHomePage) { openDialog("home") }
-            ValueRow("Default My List Page", state.defaultMyListPage) { openDialog("mylist") }
+            // RENAMED from "Default Home Page"; HOME is now a choice and the default
+            ValueRow("Default Landing Page", state.defaultHomePage) { openDialog("home") }
+            // NEW toggle, off by default
+            ToggleRow("Display Adult Content", state.displayAdultContent, viewModel::setDisplayAdultContent)
         }
         SettingsMenu.PLAYER -> {
             ValueRow("Live TV Player", state.playerEngineLive) { openDialog("player_live") }
@@ -205,11 +210,14 @@ private fun MobileSettings(state: SettingsUiState, viewModel: SettingsViewModel,
         item { ToggleRow("App Animations", state.appAnimations, viewModel::setAppAnimations) }
         item { ValueRow("Time Zone", state.timezone.ifEmpty { "System default" }) { openDialog("timezone") } }
         item { SectionHeader("Content Settings") }
+        item { ValueRow("Home Categories", "Sort & Display") { openDialog("cats_home") } }
         item { ValueRow("Movie Categories", "Sort & Display") { openDialog("cats_vod") } }
         item { ValueRow("TV Show Categories", "Sort & Display") { openDialog("cats_series") } }
         item { ValueRow("Live TV Categories", "Sort & Display") { openDialog("cats_live") } }
-        item { ValueRow("Default Home Page", state.defaultHomePage) { openDialog("home") } }
-        item { ValueRow("Default My List Page", state.defaultMyListPage) { openDialog("mylist") } }
+        // RENAMED from "Default Home Page"; HOME is now a choice and the default
+        item { ValueRow("Default Landing Page", state.defaultHomePage) { openDialog("home") } }
+        // NEW toggle, off by default
+        item { ToggleRow("Display Adult Content", state.displayAdultContent, viewModel::setDisplayAdultContent) }
         item { SectionHeader("Player Settings") }
         item { ValueRow("Live TV Player", state.playerEngineLive) { openDialog("player_live") } }
         item { ValueRow("VOD Player", state.playerEngineVod) { openDialog("player_vod") } }
@@ -266,11 +274,9 @@ private fun SortableListDialog(
                 items(localItems, key = { it.id }) { item ->
                     val index = localItems.indexOf(item)
                     val isDragged = draggedIndex == index
-
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-
                             .zIndex(if (isDragged) 1f else 0f)
                             .shadow(if (isDragged) 8.dp else 0.dp, RoundedCornerShape(8.dp))
                             .background(

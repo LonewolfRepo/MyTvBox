@@ -3,6 +3,7 @@ package com.itv.blockbuster.ui.navigation
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Search
@@ -16,7 +17,7 @@ enum class AppSection(
     val label: String,
     val icon: ImageVector
 ) {
-    HOME("home", "Home", Icons.Default.LiveTv),
+    HOME("home", "Home", Icons.Default.Home),
     SEARCH("search", "Search", Icons.Default.Search),
     MOVIES("movies", "Movies", Icons.Default.Movie),
     TV_SHOWS("tv_shows", "TV Shows", Icons.Default.Tv),

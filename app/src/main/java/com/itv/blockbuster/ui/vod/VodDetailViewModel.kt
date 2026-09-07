@@ -50,8 +50,8 @@ class VodDetailViewModel @Inject constructor(
     private val playbackManager: PlaybackManager,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
-
     private val contentType: String = savedStateHandle.get<String>("contentType") ?: "vod"
+
     private val _state = MutableStateFlow(VodDetailState())
     val state: StateFlow<VodDetailState> = _state.asStateFlow()
 
@@ -100,6 +100,16 @@ class VodDetailViewModel @Inject constructor(
             val progressList = vodRepository.getProgressForMovie(profileId, serverId, movieId)
             _state.update { it.copy(episodeProgressMap = progressList.associateBy { p -> p.episodeId }) }
         }
+    }
+
+    /**
+     * NEW: Reloads only the episode progress map (keyed by episodeId).
+     * Used when returning from the player so episode progress bars are fresh.
+     * Does NOT touch the selected season or the smart play target.
+     */
+    fun refreshEpisodeProgress() {
+        val item = _state.value.item ?: return
+        if (_state.value.hasSeasons) loadEpisodesProgress(item.id)
     }
 
     fun selectSeason(season: PortalVodItem) {
@@ -163,14 +173,11 @@ class VodDetailViewModel @Inject constructor(
                 applyFirstSeasonTarget(item, sortedSeasons, progressList)
                 return@launch
             }
-
             val episodesResult = vodRepository.getEpisodes(item.id, targetSeason.id)
             val sortedEps = episodesResult.getOrDefault(emptyList())
                 .sortedBy { it.episodeNumber.toIntOrNull() ?: Int.MAX_VALUE }
-
             val seasonProgress = progressList.filter { it.seasonId == targetSeason.id }
             val progressByEpisode = seasonProgress.associateBy { it.episodeId }
-
             val targetEpisode = sortedEps.find { it.id == latestProgress.episodeId }
             if (targetEpisode == null) {
                 val firstEp = sortedEps.firstOrNull()
@@ -190,7 +197,6 @@ class VodDetailViewModel @Inject constructor(
                 }
                 return@launch
             }
-
             val epProgress = progressByEpisode[targetEpisode.id]
             if (epProgress == null) {
                 // No progress for this episode → play from beginning
@@ -207,7 +213,6 @@ class VodDetailViewModel @Inject constructor(
                 }
                 return@launch
             }
-
             val posMs = epProgress.positionMs
             val durMs = epProgress.durationMs
             val isNearlyFinished = durMs > 0 && (durMs - posMs) <= 30_000
@@ -255,7 +260,6 @@ class VodDetailViewModel @Inject constructor(
                 val sortedNextEps = nextEpsResult.getOrDefault(emptyList())
                     .sortedBy { it.episodeNumber.toIntOrNull() ?: Int.MAX_VALUE }
                 val firstNextEp = sortedNextEps.firstOrNull()
-
                 if (firstNextEp != null) {
                     val nextSeasonProgress = progressList.filter { it.seasonId == nextSeason.id }
                     val nextProgressByEp = nextSeasonProgress.associateBy { it.episodeId }
@@ -273,7 +277,6 @@ class VodDetailViewModel @Inject constructor(
                     return@launch
                 }
             }
-
             // No next season → play least season / least episode
             applyFirstSeasonTarget(item, sortedSeasons, progressList)
         }
@@ -290,10 +293,8 @@ class VodDetailViewModel @Inject constructor(
         val sortedEps = episodesResult.getOrDefault(emptyList())
             .sortedBy { it.episodeNumber.toIntOrNull() ?: Int.MAX_VALUE }
         val firstEp = sortedEps.firstOrNull() ?: return
-
         val seasonProgress = allProgress.filter { it.seasonId == firstSeason.id }
         val progressByEp = seasonProgress.associateBy { it.episodeId }
-
         _state.update {
             it.copy(
                 selectedSeason = firstSeason, episodes = sortedEps,
@@ -329,7 +330,8 @@ class VodDetailViewModel @Inject constructor(
         episode: PortalVodItem,
         season: PortalVodItem,
         seekMs: Long,
-        onPlay: (String) -> Unit
+        onPlay: (String) -> Unit,
+        resume: Boolean = false
     ) {
         val item = _state.value.item ?: return
         viewModelScope.launch {
@@ -377,7 +379,12 @@ class VodDetailViewModel @Inject constructor(
                 playbackManager.currentGenres = item.genres
                 playbackManager.currentCountry = item.country
                 playbackManager.episodeQueue = _state.value.episodes
-                playbackManager.pendingSeekMs = seekMs
+
+                // FIX: When resuming, resolve the saved position by the resolved
+                // file ID (the exact key progress is stored under). Explicit
+                // seekMs (smart target) or 0 (from beginning) still win otherwise.
+                playbackManager.pendingSeekMs =
+                    if (resume) resolveResumePosition(fileId) else seekMs
 
                 val profileId = prefs.activeProfileIdFlow.first()
                 val serverId = sessionManager.activePortal.value?.serverId ?: 0
@@ -465,14 +472,16 @@ class VodDetailViewModel @Inject constructor(
         }
     }
 
+    // FIX: Episode Play buttons now resume partially played episodes.
+    // resume = true resolves the saved position once the file ID is known.
     fun playEpisode(episode: PortalVodItem, onPlay: (String) -> Unit) {
         val season = _state.value.selectedSeason ?: return
-        playEpisodeInternal(episode, season, 0L, onPlay)
+        playEpisodeInternal(episode, season, 0L, onPlay, resume = true)
     }
 
     fun playEpisodeFromBeginning(episode: PortalVodItem, onPlay: (String) -> Unit) {
         val season = _state.value.selectedSeason ?: return
-        playEpisodeInternal(episode, season, 0L, onPlay)
+        playEpisodeInternal(episode, season, 0L, onPlay, resume = false)
     }
 
     private fun loadEpisodes(season: PortalVodItem) {

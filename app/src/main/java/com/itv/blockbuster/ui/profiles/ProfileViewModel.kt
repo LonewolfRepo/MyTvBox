@@ -20,7 +20,6 @@ class StartupViewModel @Inject constructor(
     private val profileRepository: ProfileRepository,
     private val prefs: UserPreferencesRepository
 ) : ViewModel() {
-
     sealed class StartupState {
         object Loading : StartupState()
         data class Resolved(val showPicker: Boolean) : StartupState()
@@ -33,13 +32,31 @@ class StartupViewModel @Inject constructor(
         viewModelScope.launch {
             profileRepository.ensureDefaultProfile()
 
-            val remember = prefs.rememberLastProfileFlow.first()
-            val activeId = prefs.activeProfileIdFlow.first()
-            val activeExists = activeId > 0 && profileRepository.get(activeId) != null
+            val count = profileRepository.count()
+            if (count <= 1) {
+                // Only 1 profile exists. Never show the picker.
+                // Ensure it is set as the active profile so the app has a valid context.
+                val profiles = profileRepository.getAll().first()
+                val singleProfile = profiles.firstOrNull()
+                if (singleProfile != null) {
+                    val currentActive = prefs.activeProfileIdFlow.first()
+                    if (currentActive != singleProfile.id) {
+                        prefs.setActiveProfileId(singleProfile.id)
+                        profileRepository.touch(singleProfile.id)
+                    }
+                }
+                _state.value = StartupState.Resolved(showPicker = false)
+            } else {
+                // More than 1 profile exists.
+                val remember = prefs.rememberLastProfileFlow.first()
+                val activeId = prefs.activeProfileIdFlow.first()
+                val activeExists = activeId > 0 && profileRepository.get(activeId) != null
 
-            _state.value = StartupState.Resolved(
-                showPicker = !(remember && activeExists)
-            )
+                // Show picker only if "Remember last profile" is OFF,
+                // or if the remembered active profile no longer exists.
+                val showPicker = !(remember && activeExists)
+                _state.value = StartupState.Resolved(showPicker = showPicker)
+            }
         }
     }
 }
@@ -49,7 +66,6 @@ class ProfileViewModel @Inject constructor(
     private val profileRepository: ProfileRepository,
     private val prefs: UserPreferencesRepository
 ) : ViewModel() {
-
     val profiles: StateFlow<List<Profile>> = profileRepository.getAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 

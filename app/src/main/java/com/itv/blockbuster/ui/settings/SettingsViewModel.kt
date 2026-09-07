@@ -39,8 +39,11 @@ data class SettingsUiState(
     val rewindInterval: Int = 15,
     val forwardInterval: Int = 30,
     val timezone: String = "",
-    val defaultHomePage: String = "LIVE_TV",
-    val defaultMyListPage: String = "ALL",
+    // RENAMED concept: landing page. HOME is the initial default for every profile.
+    val defaultHomePage: String = "HOME",
+    // NEW: adult content visibility, off by default
+    val displayAdultContent: Boolean = false,
+    val homeSortItems: List<CategorySortItem> = emptyList(),
     val vodSortItems: List<CategorySortItem> = emptyList(),
     val seriesSortItems: List<CategorySortItem> = emptyList(),
     val liveSortItems: List<CategorySortItem> = emptyList(),
@@ -62,7 +65,6 @@ class SettingsViewModel @Inject constructor(
     private val recentRepository: RecentRepository,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
-
     private val _state = MutableStateFlow(SettingsUiState())
     val state: StateFlow<SettingsUiState> = _state.asStateFlow()
 
@@ -102,8 +104,10 @@ class SettingsViewModel @Inject constructor(
                 rewindInterval = settings.getInt(p, s, "rewind_interval", 15),
                 forwardInterval = settings.getInt(p, s, "forward_interval", 30),
                 timezone = settings.getString(p, s, "timezone", ""),
-                defaultHomePage = settings.getString(p, s, "default_home", "LIVE_TV"),
-                defaultMyListPage = settings.getString(p, s, "default_mylist", "ALL"),
+                // HOME is the initial default landing page for every profile
+                defaultHomePage = settings.getString(p, s, "default_home", "HOME"),
+                // NEW: off by default
+                displayAdultContent = settings.getBool(p, s, "display_adult", false),
                 diagHost = session.activePortal.value?.host ?: "",
                 diagPath = session.portalDir.value,
                 diagConnected = session.ajaxLoader.value.isNotEmpty()
@@ -114,14 +118,12 @@ class SettingsViewModel @Inject constructor(
     private fun loadCategories() {
         viewModelScope.launch {
             val p = _state.value.profileId; val s = _state.value.serverId
-
             // Clear cache if portal changed
             if (s != lastServerId) {
                 cachedVodCats = emptyList()
                 cachedLiveCats = emptyList()
                 lastServerId = s
             }
-
             // Only fetch from server if cache is empty
             if (cachedVodCats.isEmpty()) {
                 cachedVodCats = vodRepository.getCategories().getOrDefault(emptyList())
@@ -129,9 +131,10 @@ class SettingsViewModel @Inject constructor(
             if (cachedLiveCats.isEmpty()) {
                 cachedLiveCats = liveTvRepository.getCategories().getOrDefault(emptyList())
             }
-
             _state.update {
                 it.copy(
+                    // NEW: Home screen uses the VOD category master list with its own order key
+                    homeSortItems = CategorySortHelper.parse(cachedVodCats, settings.getString(p, s, "order_home", "")),
                     vodSortItems = CategorySortHelper.parse(cachedVodCats, settings.getString(p, s, "order_vod", "")),
                     seriesSortItems = CategorySortHelper.parse(cachedVodCats, settings.getString(p, s, "order_series", "")),
                     liveSortItems = CategorySortHelper.parse(cachedLiveCats, settings.getString(p, s, "order_live", ""))
@@ -154,21 +157,25 @@ class SettingsViewModel @Inject constructor(
     fun setForwardInterval(v: Int) = setI("forward_interval", v)
     fun setTimezone(v: String) = setS("timezone", v)
     fun setDefaultHomePage(v: String) = setS("default_home", v)
-    fun setDefaultMyListPage(v: String) = setS("default_mylist", v)
+    // NEW
+    fun setDisplayAdultContent(v: Boolean) = setB("display_adult", v)
 
     // Save final list to DataStore and State (called ONLY on dialog dismiss)
+    fun saveHomeSort(items: List<CategorySortItem>) = viewModelScope.launch {
+        val p = _state.value.profileId; val s = _state.value.serverId
+        settings.setString(p, s, "order_home", CategorySortHelper.serialize(items))
+        _state.update { it.copy(homeSortItems = items) }
+    }
     fun saveVodSort(items: List<CategorySortItem>) = viewModelScope.launch {
         val p = _state.value.profileId; val s = _state.value.serverId
         settings.setString(p, s, "order_vod", CategorySortHelper.serialize(items))
         _state.update { it.copy(vodSortItems = items) }
     }
-
     fun saveSeriesSort(items: List<CategorySortItem>) = viewModelScope.launch {
         val p = _state.value.profileId; val s = _state.value.serverId
         settings.setString(p, s, "order_series", CategorySortHelper.serialize(items))
         _state.update { it.copy(seriesSortItems = items) }
     }
-
     fun saveLiveSort(items: List<CategorySortItem>) = viewModelScope.launch {
         val p = _state.value.profileId; val s = _state.value.serverId
         settings.setString(p, s, "order_live", CategorySortHelper.serialize(items))
@@ -194,7 +201,7 @@ class SettingsViewModel @Inject constructor(
             val s = _state.value.serverId
             try {
                 favoriteDao.clearAll(p, s)
-                recentRepository.clearAll(p, s) // NEW
+                recentRepository.clearAll(p, s)
                 progressDao.clearAll(p, s)
                 _notice.value = "All user data cleared"
             } catch (e: Exception) {

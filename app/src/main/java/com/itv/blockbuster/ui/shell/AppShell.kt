@@ -18,8 +18,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Close
@@ -64,6 +66,7 @@ import com.itv.blockbuster.ui.theme.BbTextPrimary
 import com.itv.blockbuster.ui.theme.BbTextSecondary
 
 private val RailSections = listOf(
+    AppSection.HOME,
     AppSection.SEARCH,
     AppSection.MOVIES,
     AppSection.TV_SHOWS,
@@ -146,18 +149,28 @@ private fun RailShell(
                 onClick = { navController.navigate(Routes.PROFILE_PICKER) }
             )
 
-            RailSections.forEach { section ->
-                RailItem(
-                    icon = section.icon,
-                    label = section.label,
-                    expanded = railExpanded,
-                    selected = currentRoute == section.route,
-                    onClick = { navController.navigateToSection(section.route) }
-                )
+            // FIX: scrollable middle section so all rail items (now 10)
+            // remain reachable on short TV viewports; profile stays pinned
+            // at the top and Settings pinned at the bottom.
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                RailSections.forEach { section ->
+                    RailItem(
+                        icon = section.icon,
+                        label = section.label,
+                        expanded = railExpanded,
+                        selected = currentRoute == section.route,
+                        onClick = { navController.navigateToSection(section.route) }
+                    )
+                }
             }
 
-            Spacer(modifier = Modifier.weight(1f))
-
+            // Settings (pinned bottom)
             RailItem(
                 icon = Icons.Default.Settings,
                 label = "Settings",
@@ -298,12 +311,12 @@ private fun PortraitShell(
         }
 
         // Bottom bar: Home / Search / Profile
-        NavigationBar(containerColor = BbSurface) {
+        NavigationBar(containerColor = BbSurface, modifier = Modifier.height(78.dp)) {
             NavigationBarItem(
                 selected = currentRoute == Routes.HOME,
                 onClick = { navController.navigateToSection(Routes.HOME) },
                 icon = { Icon(AppSection.HOME.icon, "Home") },
-                label = { Text("Home") },
+                label = { Text("Home", fontSize = 11.sp) },
                 colors = NavigationBarItemDefaults.colors(
                     selectedIconColor = BbAccent,
                     selectedTextColor = BbAccent,
@@ -316,7 +329,7 @@ private fun PortraitShell(
                 selected = currentRoute == Routes.SEARCH,
                 onClick = { navController.navigateToSection(Routes.SEARCH) },
                 icon = { Icon(Icons.Default.Search, "Search") },
-                label = { Text("Search") },
+                label = { Text("Search", fontSize = 11.sp) },
                 colors = NavigationBarItemDefaults.colors(
                     selectedIconColor = BbAccent,
                     selectedTextColor = BbAccent,
@@ -328,8 +341,8 @@ private fun PortraitShell(
             NavigationBarItem(
                 selected = currentRoute == Routes.PROFILE_HUB,
                 onClick = { navController.navigateToSection(Routes.PROFILE_HUB) },
-                icon = { Icon(Icons.Default.AccountCircle, "Profile") },
-                label = { Text("Profile") },
+                icon = { Icon(Icons.Default.AccountCircle, "Profile") }, // FIX: Distinct profile icon
+                label = { Text("Profile", fontSize = 11.sp) },
                 colors = NavigationBarItemDefaults.colors(
                     selectedIconColor = BbAccent,
                     selectedTextColor = BbAccent,
