@@ -45,6 +45,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.itv.blockbuster.domain.model.PortalChannel
+import com.itv.blockbuster.ui.navigation.FormFactor
+import com.itv.blockbuster.ui.navigation.rememberFormFactor
 import com.itv.blockbuster.ui.theme.BbAccent
 import com.itv.blockbuster.ui.theme.BbCard
 import com.itv.blockbuster.ui.theme.BbTextPrimary
@@ -62,7 +64,6 @@ fun ChannelTile(
 ) {
     var focused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(targetValue = if (focused) 1.05f else 1f, label = "channelScale")
-
     Box(
         modifier = modifier
             .aspectRatio(1f)
@@ -91,7 +92,6 @@ fun ChannelTile(
                 Text(text = channel.nowPlaying, color = BbTextSecondary, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp))
             }
         }
-
         // Favorite Icon Overlay
         Box(
             modifier = Modifier
@@ -122,19 +122,26 @@ fun ChannelCarouselRow(
     onChannelLongClick: (PortalChannel) -> Unit,
     onFavoriteIconClick: (PortalChannel) -> Unit = {}
 ) {
+    val formFactor = rememberFormFactor()
+    val collapsedMenuWidth = if (formFactor == FormFactor.MOBILE_PORTRAIT) 0.dp else 84.dp
+
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(text = title, color = BbTextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 8.dp))
-        LazyRow(contentPadding = PaddingValues(horizontal = 24.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            items(channels, key = { it.id }) { channel ->
-                ChannelTile(
-                    channel = channel,
-                    isFavorite = favoriteIds.contains(channel.id),
-                    modifier = Modifier.width(160.dp),
-                    onClick = { onChannelClick(channel) },
-                    onLongClick = { onChannelLongClick(channel) },
-                    onFavoriteIconClick = { onFavoriteIconClick(channel) }
-                )
-            }
+
+        NetflixStyleCarousel(
+            items = channels,
+            collapsedMenuWidth = collapsedMenuWidth,
+            itemWidth = 160.dp,
+            itemSpacing = 12.dp
+        ) { channel ->
+            ChannelTile(
+                channel = channel,
+                isFavorite = favoriteIds.contains(channel.id),
+                modifier = Modifier.width(160.dp),
+                onClick = { onChannelClick(channel) },
+                onLongClick = { onChannelLongClick(channel) },
+                onFavoriteIconClick = { onFavoriteIconClick(channel) }
+            )
         }
     }
 }
@@ -174,7 +181,6 @@ fun ChannelListItem(
                 Text(text = channel.nowPlaying, color = BbTextSecondary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
-
         // Favorite Icon Overlay
         Box(
             modifier = Modifier

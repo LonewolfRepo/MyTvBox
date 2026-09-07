@@ -9,14 +9,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.layout.PaddingValues
 import com.itv.blockbuster.ui.components.ChannelTile
 import com.itv.blockbuster.ui.components.PosterCard
+import com.itv.blockbuster.ui.components.NetflixStyleCarousel
 import com.itv.blockbuster.util.VodNavigationCache
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
@@ -73,6 +73,9 @@ fun FavoritesHubScreen(
     val favoriteIds by viewModel.favoriteIds.collectAsState()
     val progressMap by viewModel.progressMap.collectAsState()
 
+    val formFactor = rememberFormFactor()
+    val collapsedMenuWidth = if (formFactor == FormFactor.MOBILE_PORTRAIT) 0.dp else 84.dp
+
     Box(modifier = Modifier.fillMaxSize().background(BbBackground)) {
         if (movieItems.isEmpty() && seriesItems.isEmpty() && liveChannels.isEmpty()) {
             Column(
@@ -102,23 +105,24 @@ fun FavoritesHubScreen(
                         )
                     }
                     item {
-                        LazyRow(
-                            contentPadding = PaddingValues(horizontal = 24.dp),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            items(liveChannels, key = { it.id }) { channel ->
-                                ChannelTile(
-                                    channel = channel,
-                                    isFavorite = favoriteIds.contains(channel.id),
-                                    onClick = {
-                                        viewModel.getStreamUrl(channel.cmd) { url ->
-                                            if (url.isNotEmpty()) onPlayLive(url, channel.id)
-                                        }
-                                    },
-                                    onLongClick = {},
-                                    onFavoriteIconClick = { viewModel.toggleLiveFavorite(channel) }
-                                )
-                            }
+                        NetflixStyleCarousel(
+                            items = liveChannels,
+                            collapsedMenuWidth = collapsedMenuWidth,
+                            itemWidth = 160.dp,
+                            itemSpacing = 12.dp
+                        ) { channel ->
+                            ChannelTile(
+                                channel = channel,
+                                isFavorite = favoriteIds.contains(channel.id),
+                                modifier = Modifier.width(160.dp),
+                                onClick = {
+                                    viewModel.getStreamUrl(channel.cmd) { url ->
+                                        if (url.isNotEmpty()) onPlayLive(url, channel.id)
+                                    }
+                                },
+                                onLongClick = {},
+                                onFavoriteIconClick = { viewModel.toggleLiveFavorite(channel) }
+                            )
                         }
                     }
                 }
@@ -134,28 +138,28 @@ fun FavoritesHubScreen(
                         )
                     }
                     item {
-                        LazyRow(
-                            contentPadding = PaddingValues(horizontal = 24.dp),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            items(movieItems, key = { it.id }) { item ->
-                                val progressRatio = progressMap[item.id]?.let {
-                                    if (it.durationMs > 0) (it.positionMs.toFloat() / it.durationMs.toFloat()).coerceIn(0f, 1f) else 0f
-                                } ?: 0f
+                        NetflixStyleCarousel(
+                            items = movieItems,
+                            collapsedMenuWidth = collapsedMenuWidth,
+                            itemWidth = 140.dp,
+                            itemSpacing = 12.dp
+                        ) { item ->
+                            val progressRatio = progressMap[item.id]?.let {
+                                if (it.durationMs > 0) (it.positionMs.toFloat() / it.durationMs.toFloat()).coerceIn(0f, 1f) else 0f
+                            } ?: 0f
 
-                                PosterCard(
-                                    item = item,
-                                    isFavorite = favoriteIds.contains(item.id),
-                                    progressRatio = progressRatio,
-                                    onClick = {
-                                        VodNavigationCache.currentItem = item
-                                        val type = item.contentType.ifEmpty { if (item.isSeries) "series" else "vod" }
-                                        onOpenVod(item.id, type)
-                                    },
-                                    onLongClick = { viewModel.toggleFavorite(item) },
-                                    onFavoriteIconClick = { viewModel.toggleFavorite(item) }
-                                )
-                            }
+                            PosterCard(
+                                item = item,
+                                isFavorite = favoriteIds.contains(item.id),
+                                progressRatio = progressRatio,
+                                onClick = {
+                                    VodNavigationCache.currentItem = item
+                                    val type = item.contentType.ifEmpty { if (item.isSeries) "series" else "vod" }
+                                    onOpenVod(item.id, type)
+                                },
+                                onLongClick = { viewModel.toggleFavorite(item) },
+                                onFavoriteIconClick = { viewModel.toggleFavorite(item) }
+                            )
                         }
                     }
                 }
@@ -171,28 +175,28 @@ fun FavoritesHubScreen(
                         )
                     }
                     item {
-                        LazyRow(
-                            contentPadding = PaddingValues(horizontal = 24.dp),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            items(seriesItems, key = { it.id }) { item ->
-                                val progressRatio = progressMap[item.id]?.let {
-                                    if (it.durationMs > 0) (it.positionMs.toFloat() / it.durationMs.toFloat()).coerceIn(0f, 1f) else 0f
-                                } ?: 0f
+                        NetflixStyleCarousel(
+                            items = seriesItems,
+                            collapsedMenuWidth = collapsedMenuWidth,
+                            itemWidth = 140.dp,
+                            itemSpacing = 12.dp
+                        ) { item ->
+                            val progressRatio = progressMap[item.id]?.let {
+                                if (it.durationMs > 0) (it.positionMs.toFloat() / it.durationMs.toFloat()).coerceIn(0f, 1f) else 0f
+                            } ?: 0f
 
-                                PosterCard(
-                                    item = item,
-                                    isFavorite = favoriteIds.contains(item.id),
-                                    progressRatio = progressRatio,
-                                    onClick = {
-                                        VodNavigationCache.currentItem = item
-                                        val type = item.contentType.ifEmpty { "series" }
-                                        onOpenVod(item.id, type)
-                                    },
-                                    onLongClick = { viewModel.toggleFavorite(item) },
-                                    onFavoriteIconClick = { viewModel.toggleFavorite(item) }
-                                )
-                            }
+                            PosterCard(
+                                item = item,
+                                isFavorite = favoriteIds.contains(item.id),
+                                progressRatio = progressRatio,
+                                onClick = {
+                                    VodNavigationCache.currentItem = item
+                                    val type = item.contentType.ifEmpty { "series" }
+                                    onOpenVod(item.id, type)
+                                },
+                                onLongClick = { viewModel.toggleFavorite(item) },
+                                onFavoriteIconClick = { viewModel.toggleFavorite(item) }
+                            )
                         }
                     }
                 }

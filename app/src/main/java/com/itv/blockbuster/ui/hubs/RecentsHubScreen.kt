@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -42,6 +43,9 @@ import com.itv.blockbuster.domain.model.PortalChannel
 import com.itv.blockbuster.domain.model.PortalVodItem
 import com.itv.blockbuster.ui.components.ChannelTile
 import com.itv.blockbuster.ui.components.PosterCard
+import com.itv.blockbuster.ui.components.NetflixStyleCarousel
+import com.itv.blockbuster.ui.navigation.FormFactor
+import com.itv.blockbuster.ui.navigation.rememberFormFactor
 import com.itv.blockbuster.ui.theme.BbBackground
 import com.itv.blockbuster.ui.theme.BbDestructive
 import com.itv.blockbuster.ui.theme.BbTextMuted
@@ -69,6 +73,9 @@ fun RecentsHubScreen(
     var showClearDialog by remember { mutableStateOf(false) }
     var menuTarget by remember { mutableStateOf<MenuTarget?>(null) }
 
+    val formFactor = rememberFormFactor()
+    val collapsedMenuWidth = if (formFactor == FormFactor.MOBILE_PORTRAIT) 0.dp else 84.dp
+
     Box(modifier = Modifier.fillMaxSize().background(BbBackground)) {
         if (movieItems.isEmpty() && seriesItems.isEmpty() && liveChannels.isEmpty()) {
             Column(
@@ -90,44 +97,48 @@ fun RecentsHubScreen(
                 if (liveChannels.isNotEmpty()) {
                     item { Text("Recent Live TV", color = BbTextPrimary, fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 8.dp)) }
                     item {
-                        LazyRow(contentPadding = PaddingValues(horizontal = 24.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            items(liveChannels, key = { it.id }) { channel ->
-                                Box {
-                                    ChannelTile(
-                                        channel = channel,
-                                        isFavorite = favoriteIds.contains(channel.id),
-                                        onClick = { viewModel.getStreamUrl(channel.cmd) { url -> if (url.isNotEmpty()) onPlayLive(url, channel.id) } },
-                                        onLongClick = { menuTarget = MenuTarget.Live(channel) },
-                                        onFavoriteIconClick = { viewModel.toggleLiveFavorite(channel) }
+                        NetflixStyleCarousel(
+                            items = liveChannels,
+                            collapsedMenuWidth = collapsedMenuWidth,
+                            itemWidth = 160.dp,
+                            itemSpacing = 12.dp
+                        ) { channel ->
+                            Box {
+                                ChannelTile(
+                                    channel = channel,
+                                    isFavorite = favoriteIds.contains(channel.id),
+                                    modifier = Modifier.width(160.dp),
+                                    onClick = { viewModel.getStreamUrl(channel.cmd) { url -> if (url.isNotEmpty()) onPlayLive(url, channel.id) } },
+                                    onLongClick = { menuTarget = MenuTarget.Live(channel) },
+                                    onFavoriteIconClick = { viewModel.toggleLiveFavorite(channel) }
+                                )
+                                DropdownMenu(
+                                    expanded = menuTarget is MenuTarget.Live && (menuTarget as MenuTarget.Live).channel.id == channel.id,
+                                    onDismissRequest = { menuTarget = null }
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text(if (favoriteIds.contains(channel.id)) "Remove from Favorites" else "Add to Favorites") },
+                                        onClick = {
+                                            viewModel.toggleLiveFavorite(channel)
+                                            menuTarget = null
+                                        },
+                                        leadingIcon = {
+                                            Icon(
+                                                if (favoriteIds.contains(channel.id)) Icons.Default.StarBorder else Icons.Default.Star,
+                                                contentDescription = null
+                                            )
+                                        }
                                     )
-                                    DropdownMenu(
-                                        expanded = menuTarget is MenuTarget.Live && (menuTarget as MenuTarget.Live).channel.id == channel.id,
-                                        onDismissRequest = { menuTarget = null }
-                                    ) {
-                                        DropdownMenuItem(
-                                            text = { Text(if (favoriteIds.contains(channel.id)) "Remove from Favorites" else "Add to Favorites") },
-                                            onClick = {
-                                                viewModel.toggleLiveFavorite(channel)
-                                                menuTarget = null
-                                            },
-                                            leadingIcon = {
-                                                Icon(
-                                                    if (favoriteIds.contains(channel.id)) Icons.Default.StarBorder else Icons.Default.Star,
-                                                    contentDescription = null
-                                                )
-                                            }
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text("Delete from Recent") },
-                                            onClick = {
-                                                viewModel.deleteLiveRecent(channel.id)
-                                                menuTarget = null
-                                            },
-                                            leadingIcon = {
-                                                Icon(Icons.Default.Delete, contentDescription = null, tint = BbDestructive)
-                                            }
-                                        )
-                                    }
+                                    DropdownMenuItem(
+                                        text = { Text("Delete from Recent") },
+                                        onClick = {
+                                            viewModel.deleteLiveRecent(channel.id)
+                                            menuTarget = null
+                                        },
+                                        leadingIcon = {
+                                            Icon(Icons.Default.Delete, contentDescription = null, tint = BbDestructive)
+                                        }
+                                    )
                                 }
                             }
                         }
@@ -137,53 +148,56 @@ fun RecentsHubScreen(
                 if (movieItems.isNotEmpty()) {
                     item { Text("Recent Movies", color = BbTextPrimary, fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 8.dp)) }
                     item {
-                        LazyRow(contentPadding = PaddingValues(horizontal = 24.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            items(movieItems, key = { it.id }) { item ->
-                                Box {
-                                    val progressRatio = progressMap[item.id]?.let {
-                                        if (it.durationMs > 0) (it.positionMs.toFloat() / it.durationMs.toFloat()).coerceIn(0f, 1f) else 0f
-                                    } ?: 0f
+                        NetflixStyleCarousel(
+                            items = movieItems,
+                            collapsedMenuWidth = collapsedMenuWidth,
+                            itemWidth = 140.dp,
+                            itemSpacing = 12.dp
+                        ) { item ->
+                            Box {
+                                val progressRatio = progressMap[item.id]?.let {
+                                    if (it.durationMs > 0) (it.positionMs.toFloat() / it.durationMs.toFloat()).coerceIn(0f, 1f) else 0f
+                                } ?: 0f
 
-                                    PosterCard(
-                                        item = item,
-                                        isFavorite = favoriteIds.contains(item.id),
-                                        progressRatio = progressRatio,
+                                PosterCard(
+                                    item = item,
+                                    isFavorite = favoriteIds.contains(item.id),
+                                    progressRatio = progressRatio,
+                                    onClick = {
+                                        VodNavigationCache.currentItem = item
+                                        val type = item.contentType.ifEmpty { if (item.isSeries) "series" else "vod" }
+                                        onOpenVod(item.id, type)
+                                    },
+                                    onLongClick = { menuTarget = MenuTarget.Vod(item) },
+                                    onFavoriteIconClick = { viewModel.toggleFavorite(item) }
+                                )
+                                DropdownMenu(
+                                    expanded = menuTarget is MenuTarget.Vod && (menuTarget as MenuTarget.Vod).item.id == item.id,
+                                    onDismissRequest = { menuTarget = null }
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text(if (favoriteIds.contains(item.id)) "Remove from Favorites" else "Add to Favorites") },
                                         onClick = {
-                                            VodNavigationCache.currentItem = item
-                                            val type = item.contentType.ifEmpty { if (item.isSeries) "series" else "vod" }
-                                            onOpenVod(item.id, type)
+                                            viewModel.toggleFavorite(item)
+                                            menuTarget = null
                                         },
-                                        onLongClick = { menuTarget = MenuTarget.Vod(item) },
-                                        onFavoriteIconClick = { viewModel.toggleFavorite(item) }
+                                        leadingIcon = {
+                                            Icon(
+                                                if (favoriteIds.contains(item.id)) Icons.Default.StarBorder else Icons.Default.Star,
+                                                contentDescription = null
+                                            )
+                                        }
                                     )
-                                    DropdownMenu(
-                                        expanded = menuTarget is MenuTarget.Vod && (menuTarget as MenuTarget.Vod).item.id == item.id,
-                                        onDismissRequest = { menuTarget = null }
-                                    ) {
-                                        DropdownMenuItem(
-                                            text = { Text(if (favoriteIds.contains(item.id)) "Remove from Favorites" else "Add to Favorites") },
-                                            onClick = {
-                                                viewModel.toggleFavorite(item)
-                                                menuTarget = null
-                                            },
-                                            leadingIcon = {
-                                                Icon(
-                                                    if (favoriteIds.contains(item.id)) Icons.Default.StarBorder else Icons.Default.Star,
-                                                    contentDescription = null
-                                                )
-                                            }
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text("Delete from Recent") },
-                                            onClick = {
-                                                viewModel.deleteRecent(item)
-                                                menuTarget = null
-                                            },
-                                            leadingIcon = {
-                                                Icon(Icons.Default.Delete, contentDescription = null, tint = BbDestructive)
-                                            }
-                                        )
-                                    }
+                                    DropdownMenuItem(
+                                        text = { Text("Delete from Recent") },
+                                        onClick = {
+                                            viewModel.deleteRecent(item)
+                                            menuTarget = null
+                                        },
+                                        leadingIcon = {
+                                            Icon(Icons.Default.Delete, contentDescription = null, tint = BbDestructive)
+                                        }
+                                    )
                                 }
                             }
                         }
@@ -193,53 +207,56 @@ fun RecentsHubScreen(
                 if (seriesItems.isNotEmpty()) {
                     item { Text("Recent TV Shows", color = BbTextPrimary, fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 8.dp)) }
                     item {
-                        LazyRow(contentPadding = PaddingValues(horizontal = 24.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            items(seriesItems, key = { it.id }) { item ->
-                                Box {
-                                    val progressRatio = progressMap[item.id]?.let {
-                                        if (it.durationMs > 0) (it.positionMs.toFloat() / it.durationMs.toFloat()).coerceIn(0f, 1f) else 0f
-                                    } ?: 0f
+                        NetflixStyleCarousel(
+                            items = seriesItems,
+                            collapsedMenuWidth = collapsedMenuWidth,
+                            itemWidth = 140.dp,
+                            itemSpacing = 12.dp
+                        ) { item ->
+                            Box {
+                                val progressRatio = progressMap[item.id]?.let {
+                                    if (it.durationMs > 0) (it.positionMs.toFloat() / it.durationMs.toFloat()).coerceIn(0f, 1f) else 0f
+                                } ?: 0f
 
-                                    PosterCard(
-                                        item = item,
-                                        isFavorite = favoriteIds.contains(item.id),
-                                        progressRatio = progressRatio,
+                                PosterCard(
+                                    item = item,
+                                    isFavorite = favoriteIds.contains(item.id),
+                                    progressRatio = progressRatio,
+                                    onClick = {
+                                        VodNavigationCache.currentItem = item
+                                        val type = item.contentType.ifEmpty { if (item.isSeries) "series" else "vod" }
+                                        onOpenVod(item.id, type)
+                                    },
+                                    onLongClick = { menuTarget = MenuTarget.Vod(item) },
+                                    onFavoriteIconClick = { viewModel.toggleFavorite(item) }
+                                )
+                                DropdownMenu(
+                                    expanded = menuTarget is MenuTarget.Vod && (menuTarget as MenuTarget.Vod).item.id == item.id,
+                                    onDismissRequest = { menuTarget = null }
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text(if (favoriteIds.contains(item.id)) "Remove from Favorites" else "Add to Favorites") },
                                         onClick = {
-                                            VodNavigationCache.currentItem = item
-                                            val type = item.contentType.ifEmpty { if (item.isSeries) "series" else "vod" }
-                                            onOpenVod(item.id, type)
+                                            viewModel.toggleFavorite(item)
+                                            menuTarget = null
                                         },
-                                        onLongClick = { menuTarget = MenuTarget.Vod(item) },
-                                        onFavoriteIconClick = { viewModel.toggleFavorite(item) }
+                                        leadingIcon = {
+                                            Icon(
+                                                if (favoriteIds.contains(item.id)) Icons.Default.StarBorder else Icons.Default.Star,
+                                                contentDescription = null
+                                            )
+                                        }
                                     )
-                                    DropdownMenu(
-                                        expanded = menuTarget is MenuTarget.Vod && (menuTarget as MenuTarget.Vod).item.id == item.id,
-                                        onDismissRequest = { menuTarget = null }
-                                    ) {
-                                        DropdownMenuItem(
-                                            text = { Text(if (favoriteIds.contains(item.id)) "Remove from Favorites" else "Add to Favorites") },
-                                            onClick = {
-                                                viewModel.toggleFavorite(item)
-                                                menuTarget = null
-                                            },
-                                            leadingIcon = {
-                                                Icon(
-                                                    if (favoriteIds.contains(item.id)) Icons.Default.StarBorder else Icons.Default.Star,
-                                                    contentDescription = null
-                                                )
-                                            }
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text("Delete from Recent") },
-                                            onClick = {
-                                                viewModel.deleteRecent(item)
-                                                menuTarget = null
-                                            },
-                                            leadingIcon = {
-                                                Icon(Icons.Default.Delete, contentDescription = null, tint = BbDestructive)
-                                            }
-                                        )
-                                    }
+                                    DropdownMenuItem(
+                                        text = { Text("Delete from Recent") },
+                                        onClick = {
+                                            viewModel.deleteRecent(item)
+                                            menuTarget = null
+                                        },
+                                        leadingIcon = {
+                                            Icon(Icons.Default.Delete, contentDescription = null, tint = BbDestructive)
+                                        }
+                                    )
                                 }
                             }
                         }

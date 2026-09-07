@@ -1,12 +1,17 @@
 package com.itv.blockbuster.ui.components
 
+import androidx.compose.animation.core.AnimationSpec
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.BringIntoViewSpec
+import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,6 +36,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -45,8 +51,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
@@ -69,6 +78,80 @@ data class HomeRow(
     val hasMore: Boolean = true,
     val isLoadingPage: Boolean = false
 )
+
+/**
+ * A Netflix-style horizontal carousel that locks focus to a specific left-anchored coordinate.
+ *
+ * MATHEMATICAL ANCHORING:
+ * - Calculates a 20% peek buffer for the previous card.
+ * - Locks the focused item's left edge exactly to [focusAnchorLine].
+ * - Uses native [contentPadding] to guarantee the last item can scroll into the anchor
+ *   without the focus box breaking away (runway run-out protection).
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun <T> NetflixStyleCarousel(
+    items: List<T>,
+    collapsedMenuWidth: Dp = 0.dp,
+    itemWidth: Dp,
+    itemSpacing: Dp,
+    modifier: Modifier = Modifier,
+    trailingContent: (@Composable () -> Unit)? = null,
+    itemContent: @Composable (T) -> Unit
+) {
+    val configuration = LocalConfiguration.current
+    val screenWidth = configuration.screenWidthDp.dp
+    val density = LocalDensity.current
+
+    // 1. PEEK BUFFER & ANCHOR MATHEMATICS
+    // We want exactly 20% of the previous card to be visible on the left.
+    val peekWidth = itemWidth * 0.20f
+
+    // The anchor line is where the LEFT EDGE of the focused item will land.
+    // It needs to be far enough right to show the peekWidth of the previous item, plus the spacing.
+    // (We DO NOT add collapsedMenuWidth here because the LazyRow is already placed next to the nav rail).
+    val focusAnchorLine = peekWidth + itemSpacing
+
+    // The actual width available to the LazyRow is the screen width minus the nav rail.
+    val lazyRowWidth = screenWidth - collapsedMenuWidth
+
+    // End padding ensures the last item can scroll perfectly into the focus anchor line.
+    val endPadding = (lazyRowWidth - focusAnchorLine - itemWidth).coerceAtLeast(0.dp)
+
+    val focusAnchorLinePx = with(density) { focusAnchorLine.toPx() }
+
+    // 2. CUSTOM BRING INTO VIEW SPEC (Stable API 1.7.0+)
+    val customSpec = remember(focusAnchorLinePx) {
+        object : BringIntoViewSpec {
+            override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float {
+                // 'offset' is the item's current leading edge relative to the viewport's leading edge.
+                // We want the item's leading edge to land exactly at focusAnchorLinePx.
+                return offset - focusAnchorLinePx
+            }
+
+            override val scrollAnimationSpec: AnimationSpec<Float> = tween(durationMillis = 300, easing = FastOutSlowInEasing)
+        }
+    }
+
+    CompositionLocalProvider(LocalBringIntoViewSpec provides customSpec) {
+        LazyRow(
+            modifier = modifier.fillMaxWidth(),
+            contentPadding = PaddingValues(
+                start = focusAnchorLine,
+                end = endPadding
+            ),
+            horizontalArrangement = Arrangement.spacedBy(itemSpacing),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            items(items) { item ->
+                itemContent(item)
+            }
+            if (trailingContent != null) {
+                item { trailingContent() }
+            }
+        }
+    }
+}
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -215,6 +298,9 @@ fun CarouselRow(
     onFavoriteIconClick: (PortalVodItem) -> Unit = {},
     onLoadMore: () -> Unit = {}
 ) {
+    val formFactor = rememberFormFactor()
+    val collapsedMenuWidth = if (formFactor == FormFactor.MOBILE_PORTRAIT) 0.dp else 84.dp
+
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(
             text = row.title,
@@ -223,28 +309,13 @@ fun CarouselRow(
             fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 8.dp)
         )
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 24.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            items(row.items, key = { it.id }) { item ->
-                val progress = progressMap[item.id]
-                val ratio = if (progress != null && progress.durationMs > 0) {
-                    (progress.positionMs.toFloat() / progress.durationMs.toFloat()).coerceIn(0f, 1f)
-                } else 0f
-                PosterCard(
-                    item = item,
-                    isFavorite = favoriteIds.contains(item.id),
-                    progressRatio = ratio,
-                    onClick = { onItemClick(item) },
-                    onLongClick = { onItemLongClick(item) },
-                    onFavoriteIconClick = { onFavoriteIconClick(item) }
-                )
-            }
-
-            // Horizontal Pagination Trigger
-            if (row.hasMore) {
-                item {
+        NetflixStyleCarousel(
+            items = row.items,
+            collapsedMenuWidth = collapsedMenuWidth,
+            itemWidth = 140.dp,
+            itemSpacing = 12.dp,
+            trailingContent = {
+                if (row.hasMore) {
                     LaunchedEffect(Unit) { onLoadMore() }
                     Box(
                         modifier = Modifier
@@ -264,6 +335,19 @@ fun CarouselRow(
                     }
                 }
             }
+        ) { item ->
+            val progress = progressMap[item.id]
+            val ratio = if (progress != null && progress.durationMs > 0) {
+                (progress.positionMs.toFloat() / progress.durationMs.toFloat()).coerceIn(0f, 1f)
+            } else 0f
+            PosterCard(
+                item = item,
+                isFavorite = favoriteIds.contains(item.id),
+                progressRatio = ratio,
+                onClick = { onItemClick(item) },
+                onLongClick = { onItemLongClick(item) },
+                onFavoriteIconClick = { onFavoriteIconClick(item) }
+            )
         }
     }
 }

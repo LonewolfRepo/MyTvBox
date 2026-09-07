@@ -9,7 +9,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row // FIX 2: Added missing Row import
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -39,6 +39,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.itv.blockbuster.ui.components.NetflixStyleCarousel
+import com.itv.blockbuster.ui.navigation.FormFactor
+import com.itv.blockbuster.ui.navigation.rememberFormFactor
 import com.itv.blockbuster.ui.theme.BbAccent
 import com.itv.blockbuster.ui.theme.BbBackground
 import com.itv.blockbuster.ui.theme.BbCard
@@ -46,15 +49,11 @@ import com.itv.blockbuster.ui.theme.BbSurface
 import com.itv.blockbuster.ui.theme.BbTextPrimary
 import com.itv.blockbuster.ui.theme.BbTextSecondary
 
-// =====================================================================
-// MODELS
-// =====================================================================
-
 data class HubItem(
     val id: String,
     val title: String,
     val logoUrl: String = "",
-    val kind: String = "MOVIE", // "LIVE" | "MOVIE" | "SERIES"
+    val kind: String = "MOVIE",
     val badge: String = "",
     val remainingLabel: String = "",
     val progressRatio: Float = 0f,
@@ -78,10 +77,6 @@ fun formatRemaining(ms: Long): String {
     return if (h > 0) "${h}h ${m}m" else "${m}m"
 }
 
-// =====================================================================
-// CARD
-// =====================================================================
-
 @Composable
 fun HubCard(
     item: HubItem,
@@ -93,7 +88,6 @@ fun HubCard(
         targetValue = if (focused) 1.06f else 1f,
         label = "hubScale"
     )
-
     Box(
         modifier = Modifier
             .graphicsLayer { scaleX = scale; scaleY = scale }
@@ -160,8 +154,6 @@ fun HubCard(
                     )
                 }
             }
-
-            // S:E badge (top center)
             if (item.badge.isNotEmpty()) {
                 Box(
                     modifier = Modifier
@@ -174,8 +166,6 @@ fun HubCard(
                     Text(item.badge, color = BbTextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
             }
-
-            // Bottom scrim: remaining time + progress bar
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
@@ -217,16 +207,15 @@ fun HubCard(
     }
 }
 
-// =====================================================================
-// ROW
-// =====================================================================
-
 @Composable
 fun HubRowComposable(
     row: HubRow,
     onItemClicked: (HubItem) -> Unit,
     onItemFocused: (HubItem) -> Unit = {}
 ) {
+    val formFactor = rememberFormFactor()
+    val collapsedMenuWidth = if (formFactor == FormFactor.MOBILE_PORTRAIT) 0.dp else 84.dp
+
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(
             text = row.title,
@@ -235,24 +224,21 @@ fun HubRowComposable(
             fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 8.dp)
         )
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 24.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            items(row.items, key = { it.id + it.kind }) { item ->
-                HubCard(
-                    item = item,
-                    onClick = { onItemClicked(item) },
-                    onFocusChanged = { if (it) onItemFocused(item) }
-                )
-            }
+
+        NetflixStyleCarousel(
+            items = row.items,
+            collapsedMenuWidth = collapsedMenuWidth,
+            itemWidth = 140.dp,
+            itemSpacing = 12.dp
+        ) { item ->
+            HubCard(
+                item = item,
+                onClick = { onItemClicked(item) },
+                onFocusChanged = { if (it) onItemFocused(item) }
+            )
         }
     }
 }
-
-// =====================================================================
-// DYNAMIC HERO (TV)
-// =====================================================================
 
 @Composable
 fun HubHero(item: HubItem?) {
@@ -294,7 +280,6 @@ fun HubHero(item: HubItem?) {
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
-                // FIX 2: Row is now resolved because the import was added
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (item.badge.isNotEmpty()) {
                         Text(item.badge, color = BbAccent, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
