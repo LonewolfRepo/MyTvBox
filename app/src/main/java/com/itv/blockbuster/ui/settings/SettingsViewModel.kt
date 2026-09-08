@@ -11,6 +11,7 @@ import com.itv.blockbuster.data.local.dao.PlaybackProgressDao
 import com.itv.blockbuster.data.local.dao.RecentDao
 import com.itv.blockbuster.data.repository.RecentRepository
 import com.itv.blockbuster.data.repository.LiveTvRepository
+import com.itv.blockbuster.data.repository.ServerRepository
 import com.itv.blockbuster.data.repository.VodRepository
 import com.itv.blockbuster.data.session.StalkerSessionManager
 import com.itv.blockbuster.domain.model.PortalCategory
@@ -32,23 +33,21 @@ data class SettingsUiState(
     val serverId: Int = 0,
     val rememberLastProfile: Boolean = false,
     val appAnimations: Boolean = true,
-    val autoPlayNext: Boolean = true,
+    val autoPlayNext: Boolean =  true,
     val autoStartLive: Boolean = false,
-    val playerEngineLive: String = "EXO",
-    val playerEngineVod: String = "EXO",
+    val playerEngineLive: String =  "EXO",
+    val playerEngineVod: String =  "EXO",
     val rewindInterval: Int = 15,
     val forwardInterval: Int = 30,
-    val timezone: String = "",
-    // RENAMED concept: landing page. HOME is the initial default for every profile.
-    val defaultHomePage: String = "HOME",
-    // NEW: adult content visibility, off by default
+    val timezone: String =  "",
+    val defaultHomePage: String =  "HOME",
     val displayAdultContent: Boolean = false,
     val homeSortItems: List<CategorySortItem> = emptyList(),
     val vodSortItems: List<CategorySortItem> = emptyList(),
     val seriesSortItems: List<CategorySortItem> = emptyList(),
     val liveSortItems: List<CategorySortItem> = emptyList(),
-    val diagHost: String = "",
-    val diagPath: String = "",
+    val diagHost: String =  "",
+    val diagPath: String =  "",
     val diagConnected: Boolean = false
 )
 
@@ -57,6 +56,7 @@ class SettingsViewModel @Inject constructor(
     private val settings: SettingsRepository,
     private val prefs: UserPreferencesRepository,
     private val session: StalkerSessionManager,
+    private val serverRepository: ServerRepository, // ADDED
     private val favoriteDao: FavoriteDao,
     private val recentDao: RecentDao,
     private val progressDao: PlaybackProgressDao,
@@ -72,15 +72,17 @@ class SettingsViewModel @Inject constructor(
     val notice: StateFlow<String?> = _notice.asStateFlow()
     fun clearNotice() { _notice.value = null }
 
-    // In-memory caches to prevent re-fetching from server during sorting
     private var cachedVodCats: List<PortalCategory> = emptyList()
     private var cachedLiveCats: List<PortalCategory> = emptyList()
     private var lastServerId: Int = -1
 
     init {
         viewModelScope.launch {
-            combine(prefs.activeProfileIdFlow, session.activePortal) { p, sp ->
-                Pair(p, sp?.serverId ?: 0)
+            // FIX: Use Room active server ID, not session active portal.
+            // This ensures settings are saved under the correct serverId (e.g., 1)
+            // so StartupViewModel can read them before the handshake finishes.
+            combine(prefs.activeProfileIdFlow, serverRepository.getActiveServer()) { p, srv ->
+                Pair(p, srv?.id ?: 0)
             }.collect { pair ->
                 val p = pair.first
                 val s = pair.second
@@ -104,9 +106,7 @@ class SettingsViewModel @Inject constructor(
                 rewindInterval = settings.getInt(p, s, "rewind_interval", 15),
                 forwardInterval = settings.getInt(p, s, "forward_interval", 30),
                 timezone = settings.getString(p, s, "timezone", ""),
-                // HOME is the initial default landing page for every profile
                 defaultHomePage = settings.getString(p, s, "default_home", "HOME"),
-                // NEW: off by default
                 displayAdultContent = settings.getBool(p, s, "display_adult", false),
                 diagHost = session.activePortal.value?.host ?: "",
                 diagPath = session.portalDir.value,
@@ -118,13 +118,11 @@ class SettingsViewModel @Inject constructor(
     private fun loadCategories() {
         viewModelScope.launch {
             val p = _state.value.profileId; val s = _state.value.serverId
-            // Clear cache if portal changed
             if (s != lastServerId) {
                 cachedVodCats = emptyList()
                 cachedLiveCats = emptyList()
                 lastServerId = s
             }
-            // Only fetch from server if cache is empty
             if (cachedVodCats.isEmpty()) {
                 cachedVodCats = vodRepository.getCategories().getOrDefault(emptyList())
             }
@@ -133,7 +131,6 @@ class SettingsViewModel @Inject constructor(
             }
             _state.update {
                 it.copy(
-                    // NEW: Home screen uses the VOD category master list with its own order key
                     homeSortItems = CategorySortHelper.parse(cachedVodCats, settings.getString(p, s, "order_home", "")),
                     vodSortItems = CategorySortHelper.parse(cachedVodCats, settings.getString(p, s, "order_vod", "")),
                     seriesSortItems = CategorySortHelper.parse(cachedVodCats, settings.getString(p, s, "order_series", "")),
@@ -157,10 +154,8 @@ class SettingsViewModel @Inject constructor(
     fun setForwardInterval(v: Int) = setI("forward_interval", v)
     fun setTimezone(v: String) = setS("timezone", v)
     fun setDefaultHomePage(v: String) = setS("default_home", v)
-    // NEW
     fun setDisplayAdultContent(v: Boolean) = setB("display_adult", v)
 
-    // Save final list to DataStore and State (called ONLY on dialog dismiss)
     fun saveHomeSort(items: List<CategorySortItem>) = viewModelScope.launch {
         val p = _state.value.profileId; val s = _state.value.serverId
         settings.setString(p, s, "order_home", CategorySortHelper.serialize(items))

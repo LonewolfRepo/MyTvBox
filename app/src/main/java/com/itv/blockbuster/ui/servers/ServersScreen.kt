@@ -2,9 +2,13 @@ package com.itv.blockbuster.ui.servers
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -14,9 +18,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -29,14 +30,11 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -52,13 +50,16 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -72,8 +73,10 @@ import com.itv.blockbuster.ui.theme.BbSurface
 import com.itv.blockbuster.ui.theme.BbTextMuted
 import com.itv.blockbuster.ui.theme.BbTextPrimary
 import com.itv.blockbuster.ui.theme.BbTextSecondary
+import kotlinx.coroutines.launch
 import java.util.Random
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ServersScreen(
     viewModel: ServersViewModel = hiltViewModel()
@@ -85,6 +88,7 @@ fun ServersScreen(
     var serverToEdit by remember { mutableStateOf<Server?>(null) }
     var serverToDelete by remember { mutableStateOf<Server?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
+    val snackbarScope = rememberCoroutineScope()
 
     LaunchedEffect(uiState.errorMessage, uiState.successMessage) {
         uiState.errorMessage?.let {
@@ -162,7 +166,7 @@ fun ServersScreen(
                 Text(if (uiState.isConnecting) "Connecting..." else "Add Portal")
             }
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(24.dp))
 
             if (servers.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -175,18 +179,28 @@ fun ServersScreen(
                     }
                 }
             } else {
-                LazyVerticalGrid(
-                    columns = GridCells.Adaptive(280.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                // FIX (2 & 3): Servers share the same line with more padding (24.dp).
+                // Each PortalCard unit (card + Edit + Delete) is ONE FlowRow child,
+                // so when the line can't fit a full unit, the whole unit wraps to a new line.
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(24.dp)
                 ) {
-                    items(servers) { server ->
+                    servers.forEach { server ->
                         val isActive = activeServer?.id == server.id
                         PortalCard(
                             server = server,
                             isActive = isActive,
                             isConnecting = uiState.isConnecting,
-                            onActivate = { viewModel.activateServer(server) },
+                            onActivate = {
+                                snackbarScope.launch {
+                                    snackbarHostState.showSnackbar(
+                                        "Connecting to ${server.name.ifEmpty { "portal" }}..."
+                                    )
+                                }
+                                viewModel.activateServer(server)
+                            },
                             onEdit = { serverToEdit = server },
                             onDelete = { serverToDelete = server }
                         )
@@ -211,52 +225,125 @@ fun PortalCard(
     onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
-    var isFocused by remember { mutableStateOf(false) }
+    var cardFocused by remember { mutableStateOf(false) }
+    var editFocused by remember { mutableStateOf(false) }
+    var deleteFocused by remember { mutableStateOf(false) }
 
-    Card(
-        onClick = {
-            if (!isConnecting && !isActive) onActivate()
-        },
-        modifier = Modifier
-            .fillMaxWidth()
-            .onFocusChanged { isFocused = it.isFocused }
-            .then(
-                if (isFocused) Modifier.border(2.dp, BbAccent, RoundedCornerShape(12.dp))
-                else Modifier
-            ),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isActive) BbAccent.copy(alpha = 0.15f) else BbCard
-        )
-    ) {
+    // FIX (1): Fixed-length card (280.dp) that fits at least 15 characters of the
+    // portal name. On narrow screens it shrinks just enough so the card plus its
+    // Edit/Delete buttons always fit on one line.
+    BoxWithConstraints {
+        val fixedCardWidth = 240.dp
+        val buttonsBlockWidth = 6.dp + 56.dp + 6.dp + 56.dp // spacers + Edit + Delete
+        val cardWidth = if (maxWidth >= fixedCardWidth + buttonsBlockWidth) {
+            fixedCardWidth
+        } else {
+            (maxWidth - buttonsBlockWidth).coerceAtLeast(160.dp)
+        }
+
         Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Icon(
-                Icons.Default.Dns, null,
-                tint = if (isActive) BbAccent else BbTextMuted,
-                modifier = Modifier.size(32.dp)
-            )
-            Spacer(Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
+            // ── Server card: FIXED width pill, click = connect / reconnect ──
+            Row(
+                modifier = Modifier
+                    .width(cardWidth)
+                    .height(56.dp)
+                    .clip(RoundedCornerShape(28.dp))
+                    .background(
+                        when {
+                            cardFocused -> BbAccent
+                            isActive -> BbAccent.copy(alpha = 0.15f)
+                            else -> BbCard
+                        }
+                    )
+                    .then(
+                        if (cardFocused) Modifier.border(2.dp, Color.White, RoundedCornerShape(28.dp))
+                        else Modifier
+                    )
+                    .clickable(enabled = !isConnecting, onClick = onActivate)
+                    .onFocusChanged { cardFocused = it.isFocused }
+                    .padding(horizontal = 20.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (isConnecting && isActive) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        color = if (cardFocused) Color.White else BbAccent,
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Icon(
+                        Icons.Default.Dns,
+                        contentDescription = null,
+                        tint = if (cardFocused) Color.White else if (isActive) BbAccent else BbTextMuted,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
                 Text(
-                    server.name.ifEmpty { "Unnamed Portal" },
-                    fontWeight = FontWeight.Bold, color = BbTextPrimary, fontSize = 16.sp
+                    text = server.name.ifEmpty { "Unnamed Portal" },
+                    color = if (cardFocused) Color.White else BbTextPrimary,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f) // Fills the fixed card width; ≥15 chars visible
                 )
-                Text(server.host, fontSize = 12.sp, color = BbTextMuted, maxLines = 1)
-                Text("MAC: ${server.mac}", fontSize = 11.sp, color = BbTextMuted, maxLines = 1)
-            }
-            Column {
-                IconButton(onClick = onEdit, enabled = !isConnecting) {
-                    Icon(Icons.Default.Edit, "Edit", tint = BbTextSecondary, modifier = Modifier.size(20.dp))
+                if (isActive) {
+                    Spacer(Modifier.width(12.dp))
+                    Icon(
+                        Icons.Default.CheckCircle,
+                        contentDescription = "Active",
+                        tint = if (cardFocused) Color.White else BbAccent,
+                        modifier = Modifier.size(24.dp)
+                    )
                 }
-                IconButton(onClick = onDelete, enabled = !isConnecting) {
-                    Icon(Icons.Default.Delete, "Delete", tint = BbDestructive, modifier = Modifier.size(20.dp))
-                }
             }
-            if (isActive) {
-                Icon(Icons.Default.CheckCircle, "Active", tint = BbAccent, modifier = Modifier.size(24.dp))
+
+            // ── Edit button (immediately right of the card) ──
+            Box(
+                modifier = Modifier
+                    .size(56.dp)
+                    .clip(RoundedCornerShape(28.dp))
+                    .background(if (editFocused) BbAccent else BbCard)
+                    .then(
+                        if (editFocused) Modifier.border(2.dp, Color.White, RoundedCornerShape(28.dp))
+                        else Modifier
+                    )
+                    .clickable(enabled = !isConnecting, onClick = onEdit)
+                    .onFocusChanged { editFocused = it.isFocused },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.Edit,
+                    contentDescription = "Edit",
+                    tint = if (editFocused) Color.White else BbTextSecondary,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+
+            // ── Delete button (immediately right of Edit) ──
+            Box(
+                modifier = Modifier
+                    .size(56.dp)
+                    .clip(RoundedCornerShape(28.dp))
+                    .background(if (deleteFocused) BbDestructive else BbCard)
+                    .then(
+                        if (deleteFocused) Modifier.border(2.dp, Color.White, RoundedCornerShape(28.dp))
+                        else Modifier
+                    )
+                    .clickable(enabled = !isConnecting, onClick = onDelete)
+                    .onFocusChanged { deleteFocused = it.isFocused },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.Delete,
+                    contentDescription = "Delete",
+                    tint = if (deleteFocused) Color.White else BbDestructive,
+                    modifier = Modifier.size(24.dp)
+                )
             }
         }
     }

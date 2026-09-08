@@ -1,22 +1,23 @@
 package com.itv.blockbuster.data.repository
 
+import com.itv.blockbuster.data.session.StalkerSessionManager
 import com.itv.blockbuster.domain.model.PortalConnectionResult
 import com.itv.blockbuster.domain.model.PortalServerConfig
 import com.itv.blockbuster.domain.model.Server
 import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
 class ConnectionRepository @Inject constructor(
     private val serverRepository: ServerRepository,
-    private val portalService: StalkerPortalService
+    private val portalService: StalkerPortalService,
+    private val sessionManager: StalkerSessionManager
 ) {
+    private val connectMutex = Mutex()
 
-    /**
-     * Connects to whichever portal is marked active in Room.
-     * Used on app startup and by "Retry" actions.
-     */
     suspend fun connectToActiveServer(): Result<PortalConnectionResult> {
         val server = serverRepository.getActiveServer().firstOrNull()
             ?: return Result.failure(
@@ -25,12 +26,22 @@ class ConnectionRepository @Inject constructor(
         return connectToServer(server)
     }
 
-    /**
-     * Bridges the Room [Server] model into the network layer's
-     * [PortalServerConfig] and runs the full handshake/profile flow.
-     */
-    suspend fun connectToServer(server: Server): Result<PortalConnectionResult> {
-        return portalService.connect(
+    suspend fun connectToServer(server: Server): Result<PortalConnectionResult> = connectMutex.withLock {
+        // Short-circuit if we are already connected to this exact server
+        val alreadyConnected = sessionManager.ajaxLoader.value.isNotEmpty() &&
+                sessionManager.activePortal.value?.serverId == server.id
+        if (alreadyConnected) {
+            return@withLock Result.success(
+                PortalConnectionResult(
+                    portalPath = sessionManager.portalDir.value,
+                    token = sessionManager.bearerToken.value ?: "",
+                    status = "OK",
+                    message = "Session already active"
+                )
+            )
+        }
+
+        return@withLock portalService.connect(
             PortalServerConfig(
                 id = server.id,
                 name = server.name,

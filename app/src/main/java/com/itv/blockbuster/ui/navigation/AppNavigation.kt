@@ -8,6 +8,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
@@ -38,13 +39,12 @@ import com.itv.blockbuster.ui.theme.BbBackground
 import com.itv.blockbuster.ui.vod.VodBrowserScreen
 import com.itv.blockbuster.ui.vod.VodEpisodesScreen
 import com.itv.blockbuster.ui.vod.VodDetailScreen
-
+import kotlinx.coroutines.launch
 
 object Routes {
     const val PROFILE_PICKER = "profile_picker"
     const val PROFILE_HUB = "profile_hub"
     const val SERVERS = "servers"
-
     val HOME = AppSection.HOME.route
     val SEARCH = AppSection.SEARCH.route
     val MOVIES = AppSection.MOVIES.route
@@ -54,7 +54,6 @@ object Routes {
     val MY_LIST = AppSection.MY_LIST.route
     val RECENT = AppSection.RECENT.route
     val SETTINGS = AppSection.SETTINGS.route
-
     const val VOD_BROWSER = "vod_browser/{contentType}"
     const val VOD_DETAIL = "vod_detail/{itemId}/{contentType}"
     const val PLAYER = "player/{streamUrl}/{channelId}/{videoId}"
@@ -98,29 +97,39 @@ fun AppRoot() {
             ) { CircularProgressIndicator(color = BbAccent) }
         }
         is StartupViewModel.StartupState.Resolved -> {
-            AppNavigation(startAtPicker = current.showPicker)
+            // MERGE: hand the resolved landing route into the graph
+            AppNavigation(startAtPicker = current.showPicker, landingRoute = current.landingRoute)
         }
     }
 }
 
 @Composable
-fun AppNavigation(startAtPicker: Boolean) {
+fun AppNavigation(
+    startAtPicker: Boolean,
+    landingRoute: String = Routes.HOME // CHANGE 1
+) {
     val navController = rememberNavController()
+    val scope = rememberCoroutineScope()
+    val startupViewModel: StartupViewModel = hiltViewModel() // same activity-scoped instance as AppRoot
 
     NavHost(
         navController = navController,
-        startDestination = if (startAtPicker) Routes.PROFILE_PICKER else Routes.HOME
+        // CHANGE 2: when the picker is skipped, open the configured section directly
+        startDestination = if (startAtPicker) Routes.PROFILE_PICKER else landingRoute
     ) {
         composable(Routes.PROFILE_PICKER) {
             ProfilePickerScreen(
                 onProfileSelected = {
-                    navController.navigate(Routes.HOME) {
-                        popUpTo(Routes.PROFILE_PICKER) { inclusive = true }
+                    // CHANGE 3: land on the SELECTED profile's configured page
+                    scope.launch {
+                        val route = startupViewModel.awaitLandingRoute()
+                        navController.navigate(route) {
+                            popUpTo(Routes.PROFILE_PICKER) { inclusive = true }
+                        }
                     }
                 }
             )
         }
-
         composable(Routes.HOME) {
             AppShell(navController) {
                 HomeScreen(
@@ -129,7 +138,6 @@ fun AppNavigation(startAtPicker: Boolean) {
                 )
             }
         }
-
         // FIX: Movies explicitly passes "vod" contentType
         composable(Routes.MOVIES) {
             AppShell(navController) {
@@ -139,7 +147,6 @@ fun AppNavigation(startAtPicker: Boolean) {
                 )
             }
         }
-
         // FIX: TV Shows explicitly passes "series" contentType
         composable(Routes.TV_SHOWS) {
             AppShell(navController) {
@@ -149,7 +156,6 @@ fun AppNavigation(startAtPicker: Boolean) {
                 )
             }
         }
-
         composable(Routes.LIVE_TV) {
             AppShell(navController) {
                 LiveTvScreen(
@@ -158,7 +164,6 @@ fun AppNavigation(startAtPicker: Boolean) {
                 )
             }
         }
-
         composable(Routes.TV_GUIDE) {
             AppShell(navController) {
                 TvGuideScreen(
@@ -167,7 +172,6 @@ fun AppNavigation(startAtPicker: Boolean) {
                 )
             }
         }
-
         composable(
             route = Routes.CATCHUP,
             arguments = listOf(navArgument("channelId") { type = NavType.StringType })
@@ -176,7 +180,6 @@ fun AppNavigation(startAtPicker: Boolean) {
                 CatchupScreen(onPlay = { url -> navController.navigate("player/${encodeUrl(url)}/none/none") })
             }
         }
-
         composable(Routes.MY_LIST) {
             AppShell(navController) {
                 FavoritesHubScreen(
@@ -189,7 +192,6 @@ fun AppNavigation(startAtPicker: Boolean) {
                 )
             }
         }
-
         composable(Routes.RECENT) {
             AppShell(navController) {
                 RecentsHubScreen(
@@ -202,7 +204,6 @@ fun AppNavigation(startAtPicker: Boolean) {
                 )
             }
         }
-
         composable(
             route = Routes.PLAYER,
             arguments = listOf(
@@ -224,15 +225,12 @@ fun AppNavigation(startAtPicker: Boolean) {
                 onBack = { navController.popBackStack() }
             )
         }
-
         composable(Routes.SERVERS) {
             AppShell(navController) { ServersScreen() }
         }
-
         composable(Routes.SEARCH) {
             AppShell(navController) { SectionPlaceholder(AppSection.SEARCH) }
         }
-
         composable(Routes.SETTINGS) {
             AppShell(navController) {
                 SettingsScreen(
@@ -245,13 +243,24 @@ fun AppNavigation(startAtPicker: Boolean) {
                 )
             }
         }
-
         composable(Routes.PROFILE_HUB) {
             AppShell(navController) {
                 ProfileHubScreen(
                     onOpenProfilePicker = { navController.navigate(Routes.PROFILE_PICKER) },
                     onOpenSettings = { navController.navigateToSection(Routes.SETTINGS) },
-                    onOpenPortals = { navController.navigateToSection(Routes.SERVERS) }
+                    onOpenPortals = { navController.navigateToSection(Routes.SERVERS) },
+                    onProfileSwitched = { newProfileId ->
+                        scope.launch {
+                            // 1. Wait for DataStore to confirm the new profile is active
+                            // 2. Resolve the landing route for that specific profile
+                            val route = startupViewModel.awaitProfileSwitch(newProfileId)
+
+                            // 3. Navigate and clear the Profile Hub from the backstack
+                            navController.navigate(route) {
+                                popUpTo(Routes.PROFILE_HUB) { inclusive = true }
+                            }
+                        }
+                    }
                 )
             }
         }
@@ -274,7 +283,6 @@ fun AppNavigation(startAtPicker: Boolean) {
                 )
             }
         }
-
         composable(
             route = "vod_episodes/{itemId}/{contentType}",
             arguments = listOf(

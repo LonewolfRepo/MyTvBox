@@ -45,6 +45,7 @@ fun ProfileHubScreen(
     onOpenProfilePicker: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenPortals: () -> Unit,
+    onProfileSwitched: (Int) -> Unit, // NEW: Passes the selected profile ID
     viewModel: ProfileViewModel = hiltViewModel()
 ) {
     val profiles by viewModel.profiles.collectAsState()
@@ -57,24 +58,14 @@ fun ProfileHubScreen(
             .verticalScroll(rememberScrollState())
             .padding(16.dp)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End
-        ) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
             TextButton(onClick = onOpenProfilePicker) {
-                Text(
-                    "Edit Profile",
-                    color = BbAccent,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 16.sp
-                )
+                Text("Edit Profile", color = BbAccent, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
             }
         }
 
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 12.dp),
+            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -83,62 +74,33 @@ fun ProfileHubScreen(
                     profile = profile,
                     size = 72.dp,
                     highlighted = profile.id == activeProfileId,
-                    onClick = { viewModel.selectProfile(profile) }
+                    onClick = {
+                        // FIX: Only trigger if tapping a DIFFERENT profile
+                        if (profile.id != activeProfileId) {
+                            viewModel.selectProfile(profile)
+                            onProfileSwitched(profile.id)
+                        }
+                    }
                 )
             }
         }
 
-        HorizontalDivider(
-            color = BbCard,
-            modifier = Modifier.padding(vertical = 16.dp)
-        )
+        HorizontalDivider(color = BbCard, modifier = Modifier.padding(vertical = 16.dp))
 
-        HubMenuItem(
-            icon = Icons.Default.Settings,
-            label = "Settings",
-            onClick = onOpenSettings
-        )
-        HubMenuItem(
-            icon = Icons.Default.Dns,
-            label = "Portals",
-            onClick = onOpenPortals
-        )
+        HubMenuItem(icon = Icons.Default.Settings, label = "Settings", onClick = onOpenSettings)
+        HubMenuItem(icon = Icons.Default.Dns, label = "Portals", onClick = onOpenPortals)
     }
 }
 
 @Composable
-private fun HubMenuItem(
-    icon: ImageVector,
-    label: String,
-    onClick: () -> Unit
-) {
+private fun HubMenuItem(icon: ImageVector, label: String, onClick: () -> Unit) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 18.dp),
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick).padding(horizontal = 8.dp, vertical = 18.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = BbTextPrimary,
-            modifier = Modifier.size(26.dp)
-        )
+        Icon(imageVector = icon, contentDescription = null, tint = BbTextPrimary, modifier = Modifier.size(26.dp))
         Spacer(modifier = Modifier.width(18.dp))
-        Text(
-            text = label,
-            color = BbTextPrimary,
-            fontSize = 17.sp,
-            fontWeight = FontWeight.Medium,
-            modifier = Modifier.weight(1f)
-        )
-        Icon(
-            imageVector = Icons.Default.ChevronRight,
-            contentDescription = null,
-            tint = BbTextSecondary,
-            modifier = Modifier.size(20.dp)
-        )
+        Text(text = label, color = BbTextPrimary, fontSize = 17.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+        Icon(imageVector = Icons.Default.ChevronRight, contentDescription = null, tint = BbTextSecondary, modifier = Modifier.size(20.dp))
     }
 }
