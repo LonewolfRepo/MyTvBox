@@ -30,7 +30,6 @@ class StalkerPortalService @Inject constructor(
     private val api: StalkerApi,
     private val session: StalkerSessionManager
 ) {
-
     private val portalPaths = listOf(
         "/stalker_portal/",
         "/c/",
@@ -42,11 +41,9 @@ class StalkerPortalService @Inject constructor(
     // =====================================================================
     // CONNECTION / AUTHENTICATION
     // =====================================================================
-
     suspend fun connect(config: PortalServerConfig): Result<PortalConnectionResult> = safe {
         require(config.host.isNotBlank()) { "Portal host cannot be empty" }
         require(config.mac.isNotBlank()) { "MAC address cannot be empty" }
-
         session.setActivePortal(
             ActivePortal(
                 serverId = config.id,
@@ -60,12 +57,10 @@ class StalkerPortalService @Inject constructor(
             )
         )
         session.clearSession()
-
         val cleanHost = config.host.trimEnd('/')
         var detectedPath: String? = null
         var handshakeToken: String? = null
         var lastError = "Unknown error"
-
         for (path in portalPaths) {
             try {
                 val handshakeUrl =
@@ -93,21 +88,17 @@ class StalkerPortalService @Inject constructor(
                 break
             }
         }
-
         if (detectedPath == null || handshakeToken == null) {
             throw IOException("Portal not found or handshake failed. $lastError")
         }
-
         session.setPortalDir(detectedPath)
         session.setBearerToken(handshakeToken)
-
         val serialNumber = generateSerial(config.mac)
         val profileUrl = "$cleanHost${detectedPath}server/load.php" +
                 "?action=get_profile&type=stb&hd=1" +
                 "&ver=ImageDescription:%200.2.18-r14-pub-250" +
                 "&sn=$serialNumber&stb_type=MAG254&client_type=STB" +
                 "&device_id=&deviceid2=&JsHttpRequest=1-xml"
-
         val profileResponse = try {
             api.getProfile(profileUrl)
         } catch (cancellation: CancellationException) {
@@ -115,21 +106,17 @@ class StalkerPortalService @Inject constructor(
         } catch (error: Exception) {
             throw IOException("Profile fetch failed: ${error.localizedMessage}")
         }
-
         val status = profileResponse.js.status
         val isSuccess = status.isEmpty() ||
                 status.equals("OK", ignoreCase = true) ||
                 status == "0"
-
         if (!isSuccess) {
             val errorMessage = profileResponse.js.msg
                 ?: profileResponse.js.message
                 ?: "Portal rejected profile request"
             throw IOException(errorMessage)
         }
-
         session.setAjaxLoader("$cleanHost${detectedPath}server/load.php")
-
         PortalConnectionResult(
             portalPath = detectedPath,
             token = handshakeToken,
@@ -141,7 +128,6 @@ class StalkerPortalService @Inject constructor(
     // =====================================================================
     // WATCHDOG
     // =====================================================================
-
     suspend fun sendWatchdog(): Result<Unit> = safe {
         val url = buildLoadUrl("type=watchdog&action=get_events&cur_play_type=0&event_active_id=0&init=0&JsHttpRequest=1-xml")
         api.sendWatchdog(url)
@@ -150,7 +136,6 @@ class StalkerPortalService @Inject constructor(
     // =====================================================================
     // LIVE TV
     // =====================================================================
-
     suspend fun fetchLiveCategories(): Result<List<PortalCategory>> = safe {
         api.getLiveCategories(buildLoadUrl("action=get_genres&type=itv"))
             .js.map { it.toDomain() }
@@ -191,10 +176,24 @@ class StalkerPortalService @Inject constructor(
     // =====================================================================
     // VOD / MOVIES / TV SHOWS
     // =====================================================================
-
     suspend fun fetchVodCategories(): Result<List<PortalCategory>> = safe {
         api.getVodCategories(buildLoadUrl("action=get_categories&type=vod"))
             .js.map { it.toDomain() }
+    }
+
+    // FIX: Fetch Genres for All Categories. The portal payload contains a wildcard
+    // entry (id "*" / title "*") which is NOT a real genre — "*" means ALL.
+    // It is stripped here so the genre dropdown only shows real genre descriptions
+    // plus the single synthetic "All Genres" option added by the ViewModels.
+    suspend fun fetchVodGenres(): Result<List<PortalCategory>> = safe {
+        api.getVodCategories(buildLoadUrl("type=vod&action=get_genres_by_category_alias&cat_alias=*"))
+            .js.map { it.toDomain() }
+            .filter { genre ->
+                genre.id != "*" &&
+                        genre.id != "0" &&
+                        genre.title != "*" &&
+                        genre.title.isNotBlank()
+            }
     }
 
     suspend fun fetchSeriesCategories(): Result<List<PortalCategory>> = safe {
@@ -205,32 +204,35 @@ class StalkerPortalService @Inject constructor(
     suspend fun fetchVodList(
         categoryId: String,
         page: Int = 1,
-        pageSize: Int = 20
+        pageSize: Int = 20,
+        genreId: String = ""
     ): Result<PortalPage<PortalVodItem>> = safe {
-        fetchOrderedList("vod", categoryId, page, pageSize, null)
+        fetchOrderedList("vod", categoryId, page, pageSize, null, genreId)
     }
 
-    suspend fun fetchVodSearch(query: String, categoryId: String, page: Int): Result<PortalPage<PortalVodItem>> {
+    suspend fun fetchVodSearch(query: String, categoryId: String, page: Int, genreId: String = ""): Result<PortalPage<PortalVodItem>> {
         return safe {
-            fetchOrderedList("vod", categoryId, page, 20, query)
+            fetchOrderedList("vod", categoryId, page, 20, query, genreId)
         }
     }
 
     suspend fun fetchSeriesList(
         categoryId: String,
         page: Int = 1,
-        pageSize: Int = 20
+        pageSize: Int = 20,
+        genreId: String = ""
     ): Result<PortalPage<PortalVodItem>> = safe {
-        fetchOrderedList("vod", categoryId, page, pageSize, null)
+        fetchOrderedList("vod", categoryId, page, pageSize, null, genreId)
     }
 
     suspend fun searchVod(
         query: String,
         categoryId: String,
         page: Int = 1,
-        pageSize: Int = 20
+        pageSize: Int = 20,
+        genreId: String = ""
     ): Result<PortalPage<PortalVodItem>> = safe {
-        fetchOrderedList("vod", categoryId, page, pageSize, query)
+        fetchOrderedList("vod", categoryId, page, pageSize, query, genreId)
     }
 
     // FIX: Added missing searchSeries method
@@ -238,9 +240,10 @@ class StalkerPortalService @Inject constructor(
         query: String,
         categoryId: String,
         page: Int = 1,
-        pageSize: Int = 20
+        pageSize: Int = 20,
+        genreId: String = ""
     ): Result<PortalPage<PortalVodItem>> = safe {
-        fetchOrderedList("series", categoryId, page, pageSize, query)
+        fetchOrderedList("series", categoryId, page, pageSize, query, genreId)
     }
 
     suspend fun createStreamLink(
@@ -262,22 +265,24 @@ class StalkerPortalService @Inject constructor(
     // =====================================================================
     // PRIVATE HELPERS
     // =====================================================================
-
     private suspend fun fetchOrderedList(
         type: String,
         categoryId: String,
         page: Int,
         pageSize: Int,
-        search: String?
+        search: String?,
+        genreId: String = ""
     ): PortalPage<PortalVodItem> {
         val offset = (page - 1) * pageSize
         val category = categoryId.ifBlank { "*" }
         val searchParam = if (search.isNullOrBlank()) "" else
             "&search=${URLEncoder.encode(search.trim(), "UTF-8")}"
+        // Genre filter: "*" / "0" / blank mean ALL -> no genre param appended
+        val genreParam = if (genreId.isNotBlank() && genreId != "*" && genreId != "0") "&genre=$genreId" else ""
         // FIX: Removed page_offset. Server dictates max_page_items and handles offset automatically via 'p'
         // The Stalker API uses "genre" parameter for VOD category filtering
         val params = "action=get_ordered_list&type=$type&sortby=added" +
-                "&category=$category&p=$page&video=all$searchParam"
+                "&category=$category&p=$page&video=all$searchParam$genreParam"
         val response = api.getVodList(buildLoadUrl(params))
         val items = response.js.data.orEmpty().map { it.toDomain(type) }
         return PortalPage(items, response.js.totalItems.toIntOrNull() ?: items.size)
@@ -291,14 +296,11 @@ class StalkerPortalService @Inject constructor(
 
     private fun absoluteUrl(path: String?): String {
         if (path.isNullOrBlank()) return ""
-
         // FIX: Suppress invalid "false" or "null" strings returned by some portals
         if (path.equals("false", ignoreCase = true) || path.equals("null", ignoreCase = true)) return ""
-
         if (path.startsWith("http://", true) || path.startsWith("https://", true)) return path
         val host = session.activePortal.value?.host?.trimEnd('/') ?: return path
         val portalDir = session.portalDir.value.trimEnd('/')
-
         // If the path already contains the portal directory, don't append it again
         val cleanPath = if (path.startsWith(portalDir)) {
             path

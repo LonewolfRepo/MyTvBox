@@ -83,6 +83,12 @@ fun VodBrowserScreen(
                         fontWeight = FontWeight.Bold
                     )
                     Spacer(Modifier.weight(1f))
+                    BrowserGenreDropdown(
+                        genres = state.genres,
+                        selectedGenre = state.selectedGenre,
+                        onGenreSelected = { viewModel.selectGenre(it) }
+                    )
+                    Spacer(Modifier.width(12.dp))
                     BrowserCategoryDropdown(
                         categories = state.categories,
                         selectedCategory = state.selectedCategory,
@@ -109,7 +115,12 @@ fun VodBrowserScreen(
                     // Vertical Pagination Trigger
                     if (hasMoreCategories) {
                         item {
-                            LaunchedEffect(Unit) { viewModel.loadMoreCategories() }
+                            // FIX: re-fire whenever the row set or filters change while
+                            // the spinner is visible, so pagination never stalls after
+                            // a genre selection or an empty category batch.
+                            LaunchedEffect(state.rows.size, state.selectedCategory, state.selectedGenre) {
+                                viewModel.loadMoreCategories()
+                            }
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -125,6 +136,69 @@ fun VodBrowserScreen(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BrowserGenreDropdown(
+    genres: List<PortalCategory>,
+    selectedGenre: PortalCategory?,
+    onGenreSelected: (PortalCategory) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    var isFocused by remember { mutableStateOf(false) }
+    Box(modifier = Modifier.width(220.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .background(if (isFocused) BbAccent.copy(alpha = 0.1f) else BbCard)
+                .then(
+                    if (isFocused) Modifier.border(2.dp, BbAccent, RoundedCornerShape(8.dp))
+                    else Modifier
+                )
+                .clickable { expanded = true }
+                .focusable()
+                .onFocusChanged { isFocused = it.isFocused }
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = selectedGenre?.title ?: "All Genres",
+                color = BbTextPrimary,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            Icon(
+                imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                contentDescription = "Toggle genres",
+                tint = BbTextSecondary
+            )
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.background(BbSurface)
+        ) {
+            genres.forEach { genre ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text = genre.title,
+                            color = if (genre.id == selectedGenre?.id) BbAccent else BbTextPrimary,
+                            fontWeight = if (genre.id == selectedGenre?.id) FontWeight.Bold else FontWeight.Normal
+                        )
+                    },
+                    onClick = {
+                        onGenreSelected(genre)
+                        expanded = false
+                    }
+                )
             }
         }
     }

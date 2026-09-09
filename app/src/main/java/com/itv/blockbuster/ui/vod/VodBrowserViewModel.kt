@@ -31,6 +31,8 @@ data class VodBrowserState(
     val isLoading: Boolean = false,
     val categories: List<PortalCategory> = emptyList(),
     val selectedCategory: PortalCategory? = null,
+    val genres: List<PortalCategory> = emptyList(),
+    val selectedGenre: PortalCategory? = null,
     val searchQuery: String = "",
     val rows: List<HomeRow> = emptyList()
 )
@@ -89,8 +91,7 @@ class VodBrowserViewModel @Inject constructor(
             }.flatMapLatest { (p, s) ->
                 vodRepository.getFavorites(p, s, if (_contentType == "series") "SERIES" else "VOD")
             }.collect { favs ->
-                _favoriteIds.value = favs.map { it.itemId }.toSet()
-            }
+                _favoriteIds.value = favs.map { it.itemId }.toSet() }
         }
     }
 
@@ -118,10 +119,14 @@ class VodBrowserViewModel @Inject constructor(
         _state.update { it.copy(isLoading = true) }
         try {
             val masterCats = vodRepository.getCategories().getOrDefault(emptyList())
+            val masterGenres = vodRepository.getGenres().getOrDefault(emptyList())
+
             val orderKey = if (_contentType == "series") "order_series" else "order_vod"
             val rawOrder = settings.getString(profileId, serverId, orderKey, "")
             val ordered = CategorySortHelper.applyToCategories(masterCats, rawOrder)
             val filteredOrdered = ordered.filter { it.id != "*" && it.id != "0" }
+
+            val uncensoredGenres = masterGenres.filter { !it.isCensored }
 
             _allCategories.value = filteredOrdered
             val initialBatch = filteredOrdered.take(5)
@@ -129,7 +134,17 @@ class VodBrowserViewModel @Inject constructor(
             _hasMoreCategories.value = filteredOrdered.size > 5
 
             val defaultCat = ordered.firstOrNull { it.id == "*" || it.id == "0" } ?: ordered.firstOrNull()
-            _state.update { it.copy(categories = ordered, selectedCategory = defaultCat) }
+            val allGenre = PortalCategory(id = "*", title = "All Genres", alias = "all", isCensored = false)
+            val genresWithAll = listOf(allGenre) + uncensoredGenres
+
+            _state.update {
+                it.copy(
+                    categories = ordered,
+                    selectedCategory = defaultCat,
+                    genres = genresWithAll,
+                    selectedGenre = allGenre
+                )
+            }
 
             if (defaultCat != null && (defaultCat.id == "*" || defaultCat.id == "0")) {
                 loadInitialRows(initialBatch)
@@ -144,10 +159,11 @@ class VodBrowserViewModel @Inject constructor(
     }
 
     private suspend fun loadInitialRows(cats: List<PortalCategory>) {
+        val genreId = _state.value.selectedGenre?.id ?: ""
         val rows = coroutineScope {
             cats.map { cat ->
                 async(Dispatchers.IO) {
-                    val page = vodRepository.getList(_contentType, cat.id, 1, 14)
+                    val page = vodRepository.getList(_contentType, cat.id, 1, 14, genreId)
                         .getOrDefault(PortalPage(emptyList(), 0))
                     HomeRow(cat.id, cat.title, page.items, currentPage = 1, hasMore = page.items.size >= 14)
                 }
@@ -156,13 +172,20 @@ class VodBrowserViewModel @Inject constructor(
         _state.update { it.copy(isLoading = false, rows = rows) }
     }
 
-    // ── FIX 1: Disable vertical pagination when a specific category is selected ──
     fun selectCategory(category: PortalCategory) {
         _state.update { it.copy(selectedCategory = category, searchQuery = "") }
         if (category.id != "*" && category.id != "0") {
             _hasMoreCategories.value = false
         }
         viewModelScope.launch { loadContent(category) }
+    }
+
+    fun selectGenre(genre: PortalCategory) {
+        _state.update { it.copy(selectedGenre = genre) }
+        viewModelScope.launch {
+            val cat = _state.value.selectedCategory ?: return@launch
+            loadContent(cat, _state.value.searchQuery)
+        }
     }
 
     fun updateSearch(query: String) {
@@ -177,8 +200,9 @@ class VodBrowserViewModel @Inject constructor(
     private suspend fun loadContent(category: PortalCategory, search: String = "") {
         _state.update { it.copy(isLoading = true) }
         try {
+            val genreId = _state.value.selectedGenre?.id ?: ""
             if (search.isNotBlank()) {
-                val result = vodRepository.search(_contentType, search, category.id, 1)
+                val result = vodRepository.search(_contentType, search, category.id, 1, genreId)
                 val page = result.getOrDefault(PortalPage(emptyList(), 0))
                 _hasMoreCategories.value = false
                 _state.update {
@@ -198,7 +222,7 @@ class VodBrowserViewModel @Inject constructor(
             val rows = coroutineScope {
                 catsToLoad.map { cat ->
                     async(Dispatchers.IO) {
-                        val page = vodRepository.getList(_contentType, cat.id, 1, 14)
+                        val page = vodRepository.getList(_contentType, cat.id, 1, 14, genreId)
                             .getOrDefault(PortalPage(emptyList(), 0))
                         HomeRow(cat.id, cat.title, page.items, currentPage = 1, hasMore = page.items.size >= 14)
                     }
@@ -210,7 +234,12 @@ class VodBrowserViewModel @Inject constructor(
         }
     }
 
-    // ── FIX 3: Guard — only proceed if currently in "All Categories" mode ──
+    /**
+     * FIX: Keep consuming category batches until at least one non-empty row is
+     * produced OR the category list is exhausted. With an active genre filter many
+     * categories return zero items; without this loop a single empty batch would
+     * leave the bottom spinner spinning forever.
+     */
     fun loadMoreCategories() {
         if (_isLoadingMoreCategories.value || !_hasMoreCategories.value) return
 
@@ -219,22 +248,31 @@ class VodBrowserViewModel @Inject constructor(
 
         viewModelScope.launch {
             _isLoadingMoreCategories.value = true
-            val currentSize = _visibleCategories.value.size
-            val nextBatch = _allCategories.value.drop(currentSize).take(5)
+            val genreId = _state.value.selectedGenre?.id ?: ""
 
-            val newRows = coroutineScope {
-                nextBatch.map { cat ->
-                    async(Dispatchers.IO) {
-                        val page = vodRepository.getList(_contentType, cat.id, 1, 14)
-                            .getOrDefault(PortalPage(emptyList(), 0))
-                        HomeRow(cat.id, cat.title, page.items, currentPage = 1, hasMore = page.items.size >= 14)
-                    }
-                }.awaitAll().filter { it.items.isNotEmpty() }
+            while (_hasMoreCategories.value) {
+                val currentSize = _visibleCategories.value.size
+                val nextBatch = _allCategories.value.drop(currentSize).take(5)
+                if (nextBatch.isEmpty()) {
+                    _hasMoreCategories.value = false
+                    break
+                }
+                val newRows = coroutineScope {
+                    nextBatch.map { cat ->
+                        async(Dispatchers.IO) {
+                            val page = vodRepository.getList(_contentType, cat.id, 1, 14, genreId)
+                                .getOrDefault(PortalPage(emptyList(), 0))
+                            HomeRow(cat.id, cat.title, page.items, currentPage = 1, hasMore = page.items.size >= 14)
+                        }
+                    }.awaitAll().filter { it.items.isNotEmpty() }
+                }
+                _visibleCategories.value = _visibleCategories.value + nextBatch
+                _hasMoreCategories.value = _visibleCategories.value.size < _allCategories.value.size
+                if (newRows.isNotEmpty()) {
+                    _state.update { it.copy(rows = it.rows + newRows) }
+                    break
+                }
             }
-
-            _visibleCategories.value = _visibleCategories.value + nextBatch
-            _hasMoreCategories.value = _visibleCategories.value.size < _allCategories.value.size
-            _state.update { it.copy(rows = it.rows + newRows) }
             _isLoadingMoreCategories.value = false
         }
     }
@@ -249,7 +287,8 @@ class VodBrowserViewModel @Inject constructor(
             }
 
             val nextPage = currentRow.currentPage + 1
-            val page = vodRepository.getList(_contentType, rowId, nextPage, 14)
+            val genreId = _state.value.selectedGenre?.id ?: ""
+            val page = vodRepository.getList(_contentType, rowId, nextPage, 14, genreId)
                 .getOrDefault(PortalPage(emptyList(), 0))
 
             _state.update { state ->

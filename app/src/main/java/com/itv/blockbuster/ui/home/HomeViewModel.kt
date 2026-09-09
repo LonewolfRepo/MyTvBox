@@ -40,7 +40,9 @@ data class HomeUiState(
     val hero: PortalVodItem? = null,
     val rows: List<HomeRow> = emptyList(),
     val categories: List<PortalCategory> = emptyList(),
-    val selectedCategory: PortalCategory? = null
+    val selectedCategory: PortalCategory? = null,
+    val genres: List<PortalCategory> = emptyList(),
+    val selectedGenre: PortalCategory? = null
 )
 
 @HiltViewModel
@@ -168,40 +170,79 @@ class HomeViewModel @Inject constructor(
         val p = prefs.activeProfileIdFlow.firstOrNull() ?: -1
         val s = sessionManager.activePortal.value?.serverId ?: 0
 
-        val allCategories = portalService.fetchVodCategories().getOrDefault(emptyList())
-        // FIX: Removal of Censored categories from Home
-        val uncensoredCategories = allCategories.filter { !it.isCensored }
-
         // Read the Home category order/visibility setting and remember its signature
         val rawOrder = settings.getString(p, s, "order_home", "")
         lastAppliedHomeOrder = rawOrder
 
+        val categories = portalService.fetchVodCategories().getOrDefault(emptyList())
+        val genres = portalService.fetchVodGenres().getOrDefault(emptyList())
+
+        val uncensoredCategories = categories.filter { !it.isCensored }
+        val uncensoredGenres = genres.filter { !it.isCensored }
+
+        // Respect Home Category Settings:
+        //  - only categories marked visible are kept
+        //  - kept categories stay in the exact configured order
         val orderedVisible = CategorySortHelper.applyToCategories(uncensoredCategories, rawOrder)
             .filter { it.id != "*" && it.id != "0" }
 
         _allCategories.value = orderedVisible
+        val initialBatch = orderedVisible.take(5)
+        _visibleCategories.value = initialBatch
+        _hasMoreCategories.value = orderedVisible.size > 5
 
         val allCat = PortalCategory(id = "*", title = "All Categories", alias = "all", isCensored = false)
         val categoriesWithAll = listOf(allCat) + orderedVisible
 
-        _uiState.update { it.copy(categories = categoriesWithAll, selectedCategory = allCat) }
+        val allGenre = PortalCategory(id = "*", title = "All Genres", alias = "all", isCensored = false)
+        val genresWithAll = listOf(allGenre) + uncensoredGenres
+
+        _uiState.update {
+            it.copy(
+                categories = categoriesWithAll,
+                selectedCategory = allCat,
+                genres = genresWithAll,
+                selectedGenre = allGenre
+            )
+        }
 
         loadDefaultHomeRows()
     }
 
+    fun selectCategory(category: PortalCategory) {
+        _uiState.update { it.copy(selectedCategory = category) }
+        viewModelScope.launch {
+            if (category.id == "*" || category.id == "0") {
+                loadDefaultHomeRows()
+            } else {
+                loadCategoryContent(category)
+            }
+        }
+    }
+
+    fun selectGenre(genre: PortalCategory) {
+        _uiState.update { it.copy(selectedGenre = genre) }
+        viewModelScope.launch {
+            val selectedCat = _uiState.value.selectedCategory
+            if (selectedCat?.id == "*" || selectedCat?.id == "0") {
+                loadDefaultHomeRows()
+            } else if (selectedCat != null) {
+                loadCategoryContent(selectedCat)
+            }
+        }
+    }
+
     private suspend fun loadDefaultHomeRows() {
         _uiState.update { it.copy(isLoading = true) }
-        val recentPage = portalService.fetchVodList(categoryId = "*", page = 1, pageSize = 15)
+        val genreId = _uiState.value.selectedGenre?.id ?: ""
+
+        val recentPage = portalService.fetchVodList(categoryId = "*", page = 1, pageSize = 15, genreId = genreId)
             .getOrDefault(PortalPage(emptyList(), 0))
 
-        val initialBatch = _allCategories.value.take(5)
-        _visibleCategories.value = initialBatch
-        _hasMoreCategories.value = _allCategories.value.size > 5
-
         val categoryRows = coroutineScope {
-            initialBatch.map { category ->
+            _visibleCategories.value.map { category ->
                 async(Dispatchers.IO) {
-                    val page = portalService.fetchVodList(category.id, 1, 14)
+                    val page = portalService.fetchVodList(category.id, 1, 14, genreId)
                         .getOrDefault(PortalPage(emptyList(), 0))
                     HomeRow(
                         id = category.id,
@@ -213,6 +254,7 @@ class HomeViewModel @Inject constructor(
                 }
             }.awaitAll().filter { it.items.isNotEmpty() }
         }
+
         val allRows = buildList {
             //if (recentPage.items.isNotEmpty()) add(HomeRow("recently_added", "Recently Added", recentPage.items, hasMore = false))
             // FIX: "Recently Added" is no longer capped. It now carries real pagination
@@ -234,22 +276,12 @@ class HomeViewModel @Inject constructor(
         _uiState.update { it.copy(isLoading = false, hero = recentPage.items.firstOrNull(), rows = allRows) }
     }
 
-    fun selectCategory(category: PortalCategory) {
-        _uiState.update { it.copy(selectedCategory = category) }
-        viewModelScope.launch {
-            if (category.id == "*" || category.id == "0") {
-                loadDefaultHomeRows()
-            } else {
-                loadCategoryContent(category)
-            }
-        }
-    }
-
     private suspend fun loadCategoryContent(category: PortalCategory) {
         _uiState.update { it.copy(isLoading = true, hero = null) }
         _hasMoreCategories.value = false
+        val genreId = _uiState.value.selectedGenre?.id ?: ""
 
-        val page = portalService.fetchVodList(category.id, 1, 14)
+        val page = portalService.fetchVodList(category.id, 1, 14, genreId)
             .getOrDefault(PortalPage(emptyList(), 0))
 
         val row = HomeRow(
@@ -263,31 +295,50 @@ class HomeViewModel @Inject constructor(
         _uiState.update { it.copy(isLoading = false, rows = listOf(row)) }
     }
 
+    /**
+     * FIX: Keep consuming category batches until at least one non-empty row is
+     * produced OR the category list is exhausted. With an active genre filter many
+     * categories return zero items; without this loop a single empty batch would
+     * leave the bottom spinner spinning forever.
+     */
     fun loadMoreCategories() {
         if (_isLoadingMoreCategories.value || !_hasMoreCategories.value) return
+        val selectedCat = _uiState.value.selectedCategory
+        if (selectedCat == null || (selectedCat.id != "*" && selectedCat.id != "0")) return
+
         viewModelScope.launch {
             _isLoadingMoreCategories.value = true
-            val currentSize = _visibleCategories.value.size
-            // Continues in the configured order because _allCategories is ordered/filtered
-            val nextBatch = _allCategories.value.drop(currentSize).take(5)
-            val newRows = coroutineScope {
-                nextBatch.map { category ->
-                    async(Dispatchers.IO) {
-                        val page = portalService.fetchVodList(category.id, 1, 14)
-                            .getOrDefault(PortalPage(emptyList(), 0))
-                        HomeRow(
-                            id = category.id,
-                            title = category.title,
-                            items = page.items,
-                            currentPage = 1,
-                            hasMore = page.items.size >= 14
-                        )
-                    }
-                }.awaitAll().filter { it.items.isNotEmpty() }
+            val genreId = _uiState.value.selectedGenre?.id ?: ""
+
+            while (_hasMoreCategories.value) {
+                val currentSize = _visibleCategories.value.size
+                val nextBatch = _allCategories.value.drop(currentSize).take(5)
+                if (nextBatch.isEmpty()) {
+                    _hasMoreCategories.value = false
+                    break
+                }
+                val newRows = coroutineScope {
+                    nextBatch.map { category ->
+                        async(Dispatchers.IO) {
+                            val page = portalService.fetchVodList(category.id, 1, 14, genreId)
+                                .getOrDefault(PortalPage(emptyList(), 0))
+                            HomeRow(
+                                id = category.id,
+                                title = category.title,
+                                items = page.items,
+                                currentPage = 1,
+                                hasMore = page.items.size >= 14
+                            )
+                        }
+                    }.awaitAll().filter { it.items.isNotEmpty() }
+                }
+                _visibleCategories.value = _visibleCategories.value + nextBatch
+                _hasMoreCategories.value = _visibleCategories.value.size < _allCategories.value.size
+                if (newRows.isNotEmpty()) {
+                    _uiState.update { it.copy(rows = it.rows + newRows) }
+                    break
+                }
             }
-            _visibleCategories.value = _visibleCategories.value + nextBatch
-            _hasMoreCategories.value = _visibleCategories.value.size < _allCategories.value.size
-            _uiState.update { it.copy(rows = it.rows + newRows) }
             _isLoadingMoreCategories.value = false
         }
     }
@@ -300,7 +351,8 @@ class HomeViewModel @Inject constructor(
                 state.copy(rows = state.rows.map { if (it.id == rowId) it.copy(isLoadingPage = true) else it })
             }
             val nextPage = currentRow.currentPage + 1
-            val page = portalService.fetchVodList(rowId, nextPage, 14)
+            val genreId = _uiState.value.selectedGenre?.id ?: ""
+            val page = portalService.fetchVodList(rowId, nextPage, 14, genreId)
                 .getOrDefault(PortalPage(emptyList(), 0))
             _uiState.update { state ->
                 state.copy(rows = state.rows.map {
