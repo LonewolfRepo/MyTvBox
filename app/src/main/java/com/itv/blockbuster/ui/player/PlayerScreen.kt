@@ -86,6 +86,7 @@ fun PlayerScreen(
     streamUrl: String,
     channelId: String,
     videoId: String,
+    isAdult: Boolean = false, // NEW: Accept flag from navigation
     onBack: () -> Unit,
     viewModel: PlayerViewModel = hiltViewModel()
 ) {

@@ -25,7 +25,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -35,6 +34,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -65,42 +65,41 @@ import com.itv.blockbuster.ui.theme.BbTextMuted
 import com.itv.blockbuster.ui.theme.BbTextPrimary
 import com.itv.blockbuster.ui.theme.BbTextSecondary
 
-private val RailSections = listOf(
-    AppSection.HOME,
-    AppSection.SEARCH,
-    AppSection.MOVIES,
-    AppSection.TV_SHOWS,
-    AppSection.LIVE_TV,
-    AppSection.TV_GUIDE,
-    AppSection.MY_LIST,
-    AppSection.RECENT
-)
+private val RailSections =
+    listOf(
+        AppSection.HOME,
+        AppSection.SEARCH,
+        AppSection.MOVIES,
+        AppSection.TV_SHOWS,
+        AppSection.LIVE_TV,
+        AppSection.TV_GUIDE,
+        AppSection.MY_LIST,
+        AppSection.RECENT,
+        AppSection.ADULT,
+    )
 
-private val MenuSections = listOf(
-    AppSection.HOME,
-    AppSection.MOVIES,
-    AppSection.TV_SHOWS,
-    AppSection.LIVE_TV,
-    AppSection.TV_GUIDE,
-    AppSection.MY_LIST,
-    AppSection.RECENT
-)
+private val MenuSections =
+    listOf(
+        AppSection.HOME,
+        AppSection.MOVIES,
+        AppSection.TV_SHOWS,
+        AppSection.LIVE_TV,
+        AppSection.TV_GUIDE,
+        AppSection.MY_LIST,
+        AppSection.RECENT,
+        AppSection.ADULT,
+    )
 
 @Composable
-fun AppShell(
-    navController: NavHostController,
-    content: @Composable () -> Unit
-) {
-    // Inject AppShellViewModel to activate watchdog lifecycle management
-    hiltViewModel<AppShellViewModel>()
-
+fun AppShell(navController: NavHostController, content: @Composable () -> Unit) {
+    val appShellViewModel: AppShellViewModel = hiltViewModel()
+    val showAdult by appShellViewModel.displayAdultContent.collectAsState()
     val formFactor = rememberFormFactor()
-    val currentRoute =
-        navController.currentBackStackEntryAsState().value?.destination?.route
+    val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route
 
     when (formFactor) {
-        FormFactor.MOBILE_PORTRAIT -> PortraitShell(navController, currentRoute, content)
-        else -> RailShell(navController, currentRoute, content)
+        FormFactor.MOBILE_PORTRAIT -> PortraitShell(navController, currentRoute, content, showAdult)
+        else -> RailShell(navController, currentRoute, content, showAdult)
     }
 }
 
@@ -112,24 +111,29 @@ fun AppShell(
 private fun RailShell(
     navController: NavHostController,
     currentRoute: String?,
-    content: @Composable () -> Unit
+    content: @Composable () -> Unit,
+    showAdult: Boolean,
 ) {
-    var railExpanded by remember { mutableStateOf(false) }
-    val railWidth by animateDpAsState(
-        targetValue = if (railExpanded) 280.dp else 84.dp,
-        label = "railWidth"
-    )
+    var railExpanded by remember {
+        mutableStateOf(false)
+       // val appShellViewModel: AppShellViewModel = hiltViewModel()
+       // val showAdult by appShellViewModel.displayAdultContent.collectAsState()
+
+    }
+    val railWidth by
+    animateDpAsState(targetValue = if (railExpanded) 280.dp else 84.dp, label = "railWidth")
+    val visibleRailSections = RailSections.filter { it != AppSection.ADULT || showAdult }
 
     Row(modifier = Modifier.fillMaxSize().background(BbBackground)) {
         Column(
-            modifier = Modifier
-                .width(railWidth)
-                .fillMaxHeight()
-                .background(BbSurface)
-                .onFocusChanged { railExpanded = it.hasFocus }
-                .padding(vertical = 16.dp),
+            modifier =
+                Modifier.width(railWidth)
+                    .fillMaxHeight()
+                    .background(BbSurface)
+                    .onFocusChanged { railExpanded = it.hasFocus }
+                    .padding(vertical = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Text(
                 text = "BLOCKBUSTER",
@@ -137,7 +141,7 @@ private fun RailShell(
                 fontWeight = FontWeight.ExtraBold,
                 fontSize = if (railExpanded) 18.sp else 10.sp,
                 maxLines = 1,
-                modifier = Modifier.padding(bottom = 12.dp)
+                modifier = Modifier.padding(bottom = 12.dp),
             )
 
             // Profile / Change profile
@@ -146,26 +150,24 @@ private fun RailShell(
                 label = "Change Profile",
                 expanded = railExpanded,
                 selected = false,
-                onClick = { navController.navigate(Routes.PROFILE_PICKER) }
+                onClick = { navController.navigate(Routes.PROFILE_PICKER) },
             )
 
             // FIX: scrollable middle section so all rail items (now 10)
             // remain reachable on short TV viewports; profile stays pinned
             // at the top and Settings pinned at the bottom.
             Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .verticalScroll(rememberScrollState()),
+                modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(4.dp)
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                RailSections.forEach { section ->
+                visibleRailSections.forEach { section ->
                     RailItem(
                         icon = section.icon,
                         label = section.label,
                         expanded = railExpanded,
                         selected = currentRoute == section.route,
-                        onClick = { navController.navigateToSection(section.route) }
+                        onClick = { navController.navigateToSection(section.route) },
                     )
                 }
             }
@@ -176,7 +178,7 @@ private fun RailShell(
                 label = "Settings",
                 expanded = railExpanded,
                 selected = currentRoute == Routes.SETTINGS || currentRoute == Routes.SERVERS,
-                onClick = { navController.navigateToSection(Routes.SETTINGS) }
+                onClick = { navController.navigateToSection(Routes.SETTINGS) },
             )
         }
 
@@ -192,39 +194,40 @@ private fun RailItem(
     label: String,
     expanded: Boolean,
     selected: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
-    val pillColor by animateColorAsState(
-        targetValue = when {
-            focused -> BbAccent
-            selected -> BbAccent.copy(alpha = 0.25f)
-            else -> Color.Transparent
-        },
-        label = "pill"
+    val pillColor by
+    animateColorAsState(
+        targetValue =
+            when {
+                focused -> BbAccent
+                selected -> BbAccent.copy(alpha = 0.25f)
+                else -> Color.Transparent
+            },
+        label = "pill",
     )
 
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp)
-            .clip(RoundedCornerShape(50))
-            .background(pillColor)
-            .then(
-                if (focused) Modifier.border(2.dp, BbAccent, RoundedCornerShape(50))
-                else Modifier
-            )
-            .clickable(onClick = onClick)
-            .focusable()
-            .onFocusChanged { focused = it.isFocused }
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
+        modifier =
+            Modifier.fillMaxWidth()
+                .padding(horizontal = 12.dp)
+                .clip(RoundedCornerShape(50))
+                .background(pillColor)
+                .then(
+                    if (focused) Modifier.border(2.dp, BbAccent, RoundedCornerShape(50)) else Modifier
+                )
+                .clickable(onClick = onClick)
+                .focusable()
+                .onFocusChanged { focused = it.isFocused }
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
             imageVector = icon,
             contentDescription = label,
             tint = if (focused) BbTextPrimary else if (selected) BbAccent else BbTextSecondary,
-            modifier = Modifier.size(24.dp)
+            modifier = Modifier.size(24.dp),
         )
         if (expanded) {
             Spacer(modifier = Modifier.width(14.dp))
@@ -233,7 +236,7 @@ private fun RailItem(
                 color = if (focused) BbTextPrimary else BbTextSecondary,
                 fontSize = 15.sp,
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                overflow = TextOverflow.Ellipsis,
             )
         }
     }
@@ -247,50 +250,51 @@ private fun RailItem(
 private fun PortraitShell(
     navController: NavHostController,
     currentRoute: String?,
-    content: @Composable () -> Unit
+    content: @Composable () -> Unit,
+    showAdult: Boolean,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
-    val currentLabel = when (currentRoute) {
-        Routes.PROFILE_HUB -> "Profile"
-        Routes.SETTINGS -> "Settings"
-        Routes.SERVERS -> "Portals"
-        else -> AppSection.values()
-            .firstOrNull { it.route == currentRoute }?.label ?: "Home"
-    }
+    val currentLabel =
+        when (currentRoute) {
+            Routes.PROFILE_HUB -> "Profile"
+            Routes.SETTINGS -> "Settings"
+            Routes.SERVERS -> "Portals"
+            else -> AppSection.values().firstOrNull { it.route == currentRoute }?.label ?: "Home"
+        }
 
     Column(modifier = Modifier.fillMaxSize().background(BbBackground)) {
         // Top bar
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(BbBackground)
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically
+            modifier =
+                Modifier.fillMaxWidth()
+                    .background(BbBackground)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
                 text = "BLOCKBUSTER",
                 color = BbAccent,
                 fontWeight = FontWeight.ExtraBold,
-                fontSize = 14.sp
+                fontSize = 14.sp,
             )
             Spacer(modifier = Modifier.width(16.dp))
             Row(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(8.dp))
-                    .clickable { menuOpen = true }
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
+                modifier =
+                    Modifier.clip(RoundedCornerShape(8.dp))
+                        .clickable { menuOpen = true }
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
                     text = currentLabel,
                     color = BbTextPrimary,
                     fontSize = 20.sp,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
                 )
                 Icon(
                     Icons.Default.KeyboardArrowDown,
                     contentDescription = "Open menu",
-                    tint = BbTextPrimary
+                    tint = BbTextPrimary,
                 )
             }
         }
@@ -305,7 +309,8 @@ private fun PortraitShell(
                         menuOpen = false
                         navController.navigateToSection(route)
                     },
-                    onClose = { menuOpen = false }
+                    onClose = { menuOpen = false },
+                    showAdult = showAdult,
                 )
             }
         }
@@ -317,39 +322,42 @@ private fun PortraitShell(
                 onClick = { navController.navigateToSection(Routes.HOME) },
                 icon = { Icon(AppSection.HOME.icon, "Home") },
                 label = { Text("Home", fontSize = 11.sp) },
-                colors = NavigationBarItemDefaults.colors(
-                    selectedIconColor = BbAccent,
-                    selectedTextColor = BbAccent,
-                    unselectedIconColor = BbTextMuted,
-                    unselectedTextColor = BbTextMuted,
-                    indicatorColor = BbAccent.copy(alpha = 0.15f)
-                )
+                colors =
+                    NavigationBarItemDefaults.colors(
+                        selectedIconColor = BbAccent,
+                        selectedTextColor = BbAccent,
+                        unselectedIconColor = BbTextMuted,
+                        unselectedTextColor = BbTextMuted,
+                        indicatorColor = BbAccent.copy(alpha = 0.15f),
+                    ),
             )
             NavigationBarItem(
                 selected = currentRoute == Routes.SEARCH,
                 onClick = { navController.navigateToSection(Routes.SEARCH) },
                 icon = { Icon(Icons.Default.Search, "Search") },
                 label = { Text("Search", fontSize = 11.sp) },
-                colors = NavigationBarItemDefaults.colors(
-                    selectedIconColor = BbAccent,
-                    selectedTextColor = BbAccent,
-                    unselectedIconColor = BbTextMuted,
-                    unselectedTextColor = BbTextMuted,
-                    indicatorColor = BbAccent.copy(alpha = 0.15f)
-                )
+                colors =
+                    NavigationBarItemDefaults.colors(
+                        selectedIconColor = BbAccent,
+                        selectedTextColor = BbAccent,
+                        unselectedIconColor = BbTextMuted,
+                        unselectedTextColor = BbTextMuted,
+                        indicatorColor = BbAccent.copy(alpha = 0.15f),
+                    ),
             )
             NavigationBarItem(
                 selected = currentRoute == Routes.PROFILE_HUB,
                 onClick = { navController.navigateToSection(Routes.PROFILE_HUB) },
                 icon = { Icon(Icons.Default.AccountCircle, "Profile") }, // FIX: Distinct profile icon
                 label = { Text("Profile", fontSize = 11.sp) },
-                colors = NavigationBarItemDefaults.colors(
-                    selectedIconColor = BbAccent,
-                    selectedTextColor = BbAccent,
-                    unselectedIconColor = BbTextMuted,
-                    unselectedTextColor = BbTextMuted,
-                    indicatorColor = BbAccent.copy(alpha = 0.15f)
-                )
+                colors =
+                    NavigationBarItemDefaults.colors(
+                        selectedIconColor = BbAccent,
+                        selectedTextColor = BbAccent,
+                        unselectedIconColor = BbTextMuted,
+                        unselectedTextColor = BbTextMuted,
+                        indicatorColor = BbAccent.copy(alpha = 0.15f),
+                    ),
             )
         }
     }
@@ -359,17 +367,19 @@ private fun PortraitShell(
 private fun OverlayMenu(
     currentRoute: String?,
     onSelect: (String) -> Unit,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    showAdult: Boolean,
 ) {
+    val visibleMenuSections = MenuSections.filter { it != AppSection.ADULT || showAdult }
     Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.88f))
-            .padding(vertical = 24.dp),
+        modifier =
+            Modifier.fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.88f))
+                .padding(vertical = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+        verticalArrangement = Arrangement.Center,
     ) {
-        MenuSections.forEach { section ->
+        visibleMenuSections.forEach { section ->
             val active = currentRoute == section.route
             Text(
                 text = section.label,
@@ -377,21 +387,21 @@ private fun OverlayMenu(
                 fontSize = 26.sp,
                 fontWeight = FontWeight.SemiBold,
                 textAlign = TextAlign.Center,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(12.dp))
-                    .clickable { onSelect(section.route) }
-                    .padding(horizontal = 32.dp, vertical = 14.dp)
+                modifier =
+                    Modifier.clip(RoundedCornerShape(12.dp))
+                        .clickable { onSelect(section.route) }
+                        .padding(horizontal = 32.dp, vertical = 14.dp),
             )
         }
         Spacer(modifier = Modifier.height(24.dp))
         Box(
-            modifier = Modifier
-                .size(52.dp)
-                .clip(CircleShape)
-                .background(Color.White.copy(alpha = 0.08f))
-                .clickable(onClick = onClose)
-                .border(2.dp, Color.White, CircleShape),
-            contentAlignment = Alignment.Center
+            modifier =
+                Modifier.size(52.dp)
+                    .clip(CircleShape)
+                    .background(Color.White.copy(alpha = 0.08f))
+                    .clickable(onClick = onClose)
+                    .border(2.dp, Color.White, CircleShape),
+            contentAlignment = Alignment.Center,
         ) {
             Icon(Icons.Default.Close, "Close menu", tint = Color.White)
         }

@@ -74,6 +74,7 @@ enum class SortMode { DEFAULT, A_Z, Z_A, NUMERIC }
 fun LiveTvScreen(
     onPlayChannel: (String, String) -> Unit, // (streamUrl, channelId)
     onOpenCatchup: (String) -> Unit,
+    censoredOnly: Boolean = false, // NEW: Accept flag from navigation
     viewModel: LiveTvViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsState()

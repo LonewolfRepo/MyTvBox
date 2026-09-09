@@ -1,12 +1,12 @@
 package com.itv.blockbuster.data.session
 
+import java.util.TimeZone
+import javax.inject.Inject
+import javax.inject.Singleton
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import java.util.TimeZone
-import javax.inject.Inject
-import javax.inject.Singleton
 
 data class ActivePortal(
     val serverId: Int,
@@ -16,7 +16,7 @@ data class ActivePortal(
     val username: String = "",
     val password: String = "",
     val useCredentials: Boolean = false,
-    val timezoneId: String = TimeZone.getDefault().id
+    val timezoneId: String = TimeZone.getDefault().id,
 )
 
 @Singleton
@@ -37,6 +37,10 @@ class StalkerSessionManager @Inject constructor() {
     private val _cookies = MutableStateFlow<Set<String>>(emptySet())
     val cookies: StateFlow<Set<String>> = _cookies.asStateFlow()
 
+    // NEW: Parent password fetched from get_profile, used to unlock Adult section
+    private val _parentPassword = MutableStateFlow("")
+    val parentPassword: StateFlow<String> = _parentPassword.asStateFlow()
+
     fun setActivePortal(portal: ActivePortal) {
         _activePortal.value = portal
     }
@@ -53,6 +57,11 @@ class StalkerSessionManager @Inject constructor() {
         _ajaxLoader.value = url
     }
 
+    // NEW
+    fun setParentPassword(password: String) {
+        _parentPassword.value = password
+    }
+
     fun appendCookie(cookie: String) {
         val cleaned = cookie.trim()
         if (cleaned.isEmpty()) return
@@ -63,6 +72,7 @@ class StalkerSessionManager @Inject constructor() {
         _bearerToken.value = null
         _ajaxLoader.value = ""
         _cookies.value = emptySet()
+        _parentPassword.value = "" // Clear on logout
     }
 
     fun clearAll() {

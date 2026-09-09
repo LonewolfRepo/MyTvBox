@@ -71,6 +71,7 @@ import com.itv.blockbuster.util.VodNavigationCache
 fun HomeScreen(
     onOpenPortals: () -> Unit,
     onOpenVodDetail: (String, String) -> Unit,
+    censoredOnly: Boolean = false, // NEW: Accept flag from navigation
     viewModel: HomeViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsState()

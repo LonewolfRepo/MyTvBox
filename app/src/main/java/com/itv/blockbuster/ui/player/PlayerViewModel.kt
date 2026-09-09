@@ -1,5 +1,6 @@
 package com.itv.blockbuster.ui.player
 
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.itv.blockbuster.data.local.SettingsRepository
@@ -38,8 +39,12 @@ class PlayerViewModel @Inject constructor(
     private val settings: SettingsRepository,
     private val prefs: UserPreferencesRepository,
     private val sessionManager: StalkerSessionManager,
-    private val recentRepository: RecentRepository
+    private val recentRepository: RecentRepository,
+    savedStateHandle: SavedStateHandle
 ) : ViewModel() {
+
+    // NEW: Read navigation argument to block history/progress in Adult mode
+    private val isAdult: Boolean = savedStateHandle.get<Boolean>("isAdult") ?: false
 
     val autoPlayNext: StateFlow<Boolean> = prefs.autoPlayNextFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
@@ -87,9 +92,12 @@ class PlayerViewModel @Inject constructor(
             playbackManager.epgPrograms = epg
             _liveBanner.value = LiveBannerData(channel, epg.firstOrNull(), epg.getOrNull(1))
 
-            val profileId = prefs.activeProfileIdFlow.first()
-            val serverId = sessionManager.activePortal.value?.serverId ?: 0
-            liveTvRepository.addRecent(profileId, serverId, channel)
+            // FIX: Do not add to Recents if Adult
+            if (!isAdult) {
+                val profileId = prefs.activeProfileIdFlow.first()
+                val serverId = sessionManager.activePortal.value?.serverId ?: 0
+                liveTvRepository.addRecent(profileId, serverId, channel)
+            }
         }
     }
 
@@ -103,12 +111,15 @@ class PlayerViewModel @Inject constructor(
             playbackManager.epgPrograms = epg
             _liveBanner.value = LiveBannerData(next, epg.firstOrNull(), epg.getOrNull(1))
             playbackManager.play(url)
-            val profileId = prefs.activeProfileIdFlow.first()
-            val serverId = sessionManager.activePortal.value?.serverId ?: 0
-            liveTvRepository.addRecent(profileId, serverId, next)
+
+            // FIX: Do not add to Recents if Adult
+            if (!isAdult) {
+                val profileId = prefs.activeProfileIdFlow.first()
+                val serverId = sessionManager.activePortal.value?.serverId ?: 0
+                liveTvRepository.addRecent(profileId, serverId, next)
+            }
         }
     }
-
     // =====================================================================
     // VOD PROGRESS
     // =====================================================================
@@ -118,6 +129,9 @@ class PlayerViewModel @Inject constructor(
 
     fun saveCurrentProgress() {
         viewModelScope.launch {
+            // FIX: Do not save progress if Adult
+            if (isAdult) return@launch
+
             val player = playbackManager.player
             val videoId = playbackManager.currentVideoId
             if (videoId.isEmpty() || player.duration <= 0) return@launch
