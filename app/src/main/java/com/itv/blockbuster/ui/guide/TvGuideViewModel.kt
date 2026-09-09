@@ -4,8 +4,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.itv.blockbuster.data.local.UserPreferencesRepository
 import com.itv.blockbuster.data.player.PlaybackManager
+import com.itv.blockbuster.data.repository.ConnectionRepository
 import com.itv.blockbuster.data.repository.LiveTvRepository
 import com.itv.blockbuster.data.repository.RecentRepository
+import com.itv.blockbuster.data.repository.ServerRepository
 import com.itv.blockbuster.data.session.StalkerSessionManager
 import com.itv.blockbuster.domain.model.EpgProgram
 import com.itv.blockbuster.domain.model.PortalCategory
@@ -15,7 +17,9 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -43,6 +47,8 @@ data class GuideUiState(
 class TvGuideViewModel @Inject constructor(
     private val liveTvRepository: LiveTvRepository,
     private val recentRepository: RecentRepository,
+    private val connectionRepository: ConnectionRepository, // NEW
+    private val serverRepository: ServerRepository,         // NEW
     private val prefs: UserPreferencesRepository,
     private val sessionManager: StalkerSessionManager,
     val playbackManager: PlaybackManager
@@ -53,7 +59,16 @@ class TvGuideViewModel @Inject constructor(
 
     init {
         tick()
-        viewModelScope.launch { load() }
+        // FIX: Observe profile/portal changes and ensure connection before loading.
+        // This prevents the blank screen race condition when the app starts on
+        // a different landing page and the user navigates to the TV Guide early.
+        viewModelScope.launch {
+            combine(prefs.activeProfileIdFlow, sessionManager.activePortal) { p, sp ->
+                Pair(p, sp?.serverId ?: 0)
+            }.collect {
+                connectAndLoad()
+            }
+        }
     }
 
     private fun tick() {
@@ -63,15 +78,44 @@ class TvGuideViewModel @Inject constructor(
         _uiState.update { it.copy(nowMin = nowMin, clock = clock) }
     }
 
+    private fun connectAndLoad() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true) }
+            val server = serverRepository.getActiveServer().firstOrNull()
+            if (server == null) {
+                _uiState.update { it.copy(isLoading = false) }
+                return@launch
+            }
+
+            // Check if we actually need to run the handshake/connection flow
+            val needsConnect = sessionManager.ajaxLoader.value.isEmpty() ||
+                    sessionManager.activePortal.value?.serverId != server.id
+
+            if (needsConnect) {
+                val result = connectionRepository.connectToServer(server)
+                if (result.isFailure) {
+                    _uiState.update { it.copy(isLoading = false) }
+                    return@launch
+                }
+            }
+
+            // Session is guaranteed to be connected now
+            load()
+        }
+    }
+
     private suspend fun load() {
         _uiState.update { it.copy(isLoading = true) }
         val allCats = liveTvRepository.getCategories().getOrDefault(emptyList())
+
         // Identify and filter out censored categories (censored == 1)
         val censoredCategoryIds = allCats.filter { it.isCensored }.map { it.id }.toSet()
         val cats = allCats.filter { !it.isCensored }
+
         // Filter out channels belonging to censored categories
         val allChannels = liveTvRepository.getAllChannels().getOrDefault(PortalPage(emptyList(), 0)).items
             .filter { it.genreId !in censoredCategoryIds }
+
         // Properly handle "All" category so channels aren't filtered out
         val default = cats.firstOrNull { it.id == "*" || it.id == "0" || it.id == "all" } ?: cats.firstOrNull()
         val isAll = default == null || default.id == "*" || default.id == "0" || default.id == "all"
@@ -86,6 +130,7 @@ class TvGuideViewModel @Inject constructor(
             .firstOrNull { it.type == "LIVE" }
             ?.itemId
         val lastPlayedId = sessionChannelId ?: recentChannelId
+
         _uiState.update {
             it.copy(
                 isLoading = false,
@@ -96,6 +141,7 @@ class TvGuideViewModel @Inject constructor(
                 lastPlayedChannelId = lastPlayedId
             )
         }
+
         // Auto-preview the last played channel so the top-left player resumes it
         val lastChannel = filteredChannels.firstOrNull { it.id == lastPlayedId }
             ?: allChannels.firstOrNull { it.id == lastPlayedId }
@@ -124,6 +170,7 @@ class TvGuideViewModel @Inject constructor(
                 !_uiState.value.previewUrl.isNullOrEmpty() &&
                 playbackManager.player.currentMediaItem != null
             ) return@launch
+
             _uiState.update { it.copy(previewChannel = channel, previewUrl = null) }
             val url = liveTvRepository.createStreamLink(channel.cmd).getOrDefault("")
             val epg = liveTvRepository.getShortEpgCached(channel.id)
