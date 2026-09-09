@@ -110,7 +110,7 @@ class LiveTvViewModel @Inject constructor(
 
         // FIX: Identify and filter out censored categories (censored == 1)
         val censoredCategoryIds = allCats.filter { it.isCensored }.map { it.id }.toSet()
-        //val cats = allCats.filter { !it.isCensored }
+
         // FIX: Invert category filter for Adult mode
         val cats = allCats.filter { it.isCensored == censoredOnly }
 

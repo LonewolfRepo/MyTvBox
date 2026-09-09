@@ -34,7 +34,7 @@ class AppShellViewModel @Inject constructor(
         prefs.activeProfileIdFlow,
         sessionManager.activePortal
     ) { p, sp -> Pair(p, sp?.serverId ?: 0) }.flatMapLatest { (p, s) ->
-        settings.getBoolFlow(p, s, "display_adult_content", false)
+        settings.getBoolFlow(p, s, "display_adult", false)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
     init {

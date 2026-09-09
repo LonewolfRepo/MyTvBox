@@ -68,7 +68,7 @@ class HomeViewModel @Inject constructor(
         const val SEARCH_DEBOUNCE_MS = 800L
     }
 
-    // NEW: Read navigation argument to invert filters for Adult mode
+    // FIX: Read navigation argument to invert filters for Adult mode
     private val censoredOnly: Boolean = savedStateHandle.get<Boolean>("censoredOnly") ?: false
 
     private val _uiState = MutableStateFlow(HomeUiState())
@@ -95,8 +95,7 @@ class HomeViewModel @Inject constructor(
     private var searchJob: Job? = null
 
     // FIX: Invert filter based on censoredOnly flag
-    private fun List<PortalVodItem>.visible(): List<PortalVodItem> =
-        if (censoredOnly) filter { it.isCensored } else filter { !it.isCensored }
+    private fun List<PortalVodItem>.visible(): List<PortalVodItem> = filter { it.isCensored == censoredOnly }
 
     init {
         viewModelScope.launch {
@@ -143,8 +142,7 @@ class HomeViewModel @Inject constructor(
     }
 
     fun toggleFavorite(item: PortalVodItem) {
-        // BLOCK favorites if in Censored mode
-        if (censoredOnly) return
+        if (censoredOnly) return // Block favorites in adult mode
         viewModelScope.launch {
             val p = prefs.activeProfileIdFlow.firstOrNull() ?: return@launch
             val s = sessionManager.activePortal.value?.serverId ?: 0
@@ -218,10 +216,10 @@ class HomeViewModel @Inject constructor(
         _visibleCategories.value = initialBatch
         _hasMoreCategories.value = orderedVisible.size > 5
 
-        val allCat = PortalCategory(id = "*", title = "All Categories", alias = "all", isCensored = false)
+        val allCat = PortalCategory(id = "*", title = "All Categories", alias = "all", isCensored = censoredOnly)
         val categoriesWithAll = listOf(allCat) + orderedVisible
 
-        val allGenre = PortalCategory(id = "*", title = "All Genres", alias = "all", isCensored = false)
+        val allGenre = PortalCategory(id = "*", title = "All Genres", alias = "all", isCensored = censoredOnly)
         val genresWithAll = listOf(allGenre) + uncensoredGenres
 
         _uiState.update {
