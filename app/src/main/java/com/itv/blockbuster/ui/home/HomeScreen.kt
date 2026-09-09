@@ -1,6 +1,9 @@
 package com.itv.blockbuster.ui.home
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,12 +14,18 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -25,21 +34,31 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import com.itv.blockbuster.domain.model.PortalCategory
 import com.itv.blockbuster.ui.components.CarouselRow
 import com.itv.blockbuster.ui.components.HeroBanner
 import com.itv.blockbuster.ui.theme.BbAccent
 import com.itv.blockbuster.ui.theme.BbBackground
+import com.itv.blockbuster.ui.theme.BbCard
+import com.itv.blockbuster.ui.theme.BbSurface
 import com.itv.blockbuster.ui.theme.BbTextMuted
+import com.itv.blockbuster.ui.theme.BbTextPrimary
 import com.itv.blockbuster.ui.theme.BbTextSecondary
 import com.itv.blockbuster.util.VodNavigationCache
 
@@ -76,41 +95,133 @@ fun HomeScreen(
             )
             (state.isLoading || state.isConnecting) && state.rows.isEmpty() ->
                 LoadingOverlay(isConnecting = state.isConnecting)
-            else -> LazyColumn(modifier = Modifier.fillMaxSize()) {
-                item(key = "hero") { HeroBanner(hero = state.hero) }
-                items(state.rows, key = { it.id }) { row ->
-                    CarouselRow(
-                        row = row,
-                        favoriteIds = favoriteIds,
-                        progressMap = progressMap,
-                        onItemClick = { item ->
-                            VodNavigationCache.currentItem = item
-                            onOpenVodDetail(item.id, if (item.isSeries) "series" else "vod")
-                        },
-                        onItemLongClick = { item -> viewModel.toggleFavorite(item) },
-                        onFavoriteIconClick = { item -> viewModel.toggleFavorite(item) },
-                        onLoadMore = { viewModel.loadMoreRowItems(row.id) }
-                    )
-                }
-                // Vertical Pagination Trigger
-                if (hasMoreCategories) {
-                    item {
-                        LaunchedEffect(Unit) { viewModel.loadMoreCategories() }
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            CircularProgressIndicator(
-                                color = BbAccent,
-                                strokeWidth = 2.dp,
-                                modifier = Modifier.size(32.dp)
+            else -> {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    // NEW: Top Bar with Category Filter
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Home",
+                            color = BbAccent,
+                            fontSize = 22.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(Modifier.weight(1f))
+                        HomeCategoryDropdown(
+                            categories = state.categories,
+                            selectedCategory = state.selectedCategory,
+                            onCategorySelected = { viewModel.selectCategory(it) }
+                        )
+                    }
+
+                    LazyColumn(modifier = Modifier.fillMaxSize()) {
+                        // Only show HeroBanner if "All Categories" is selected
+                        val isAllCategories = state.selectedCategory?.id == "*" || state.selectedCategory?.id == "0"
+                        if (isAllCategories) {
+                            item(key = "hero") { HeroBanner(hero = state.hero) }
+                        }
+                        items(state.rows, key = { it.id }) { row ->
+                            CarouselRow(
+                                row = row,
+                                favoriteIds = favoriteIds,
+                                progressMap = progressMap,
+                                onItemClick = { item ->
+                                    VodNavigationCache.currentItem = item
+                                    onOpenVodDetail(item.id, if (item.isSeries) "series" else "vod")
+                                },
+                                onItemLongClick = { item -> viewModel.toggleFavorite(item) },
+                                onFavoriteIconClick = { item -> viewModel.toggleFavorite(item) },
+                                onLoadMore = { viewModel.loadMoreRowItems(row.id) }
                             )
                         }
+                        // Vertical Pagination Trigger (only for All Categories)
+                        if (hasMoreCategories && isAllCategories) {
+                            item {
+                                LaunchedEffect(Unit) { viewModel.loadMoreCategories() }
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(16.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    CircularProgressIndicator(
+                                        color = BbAccent,
+                                        strokeWidth = 2.dp,
+                                        modifier = Modifier.size(32.dp)
+                                    )
+                                }
+                            }
+                        }
+                        item(key = "bottom_spacer") { Spacer(modifier = Modifier.height(32.dp)) }
                     }
                 }
-                item(key = "bottom_spacer") { Spacer(modifier = Modifier.height(32.dp)) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HomeCategoryDropdown(
+    categories: List<PortalCategory>,
+    selectedCategory: PortalCategory?,
+    onCategorySelected: (PortalCategory) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    var isFocused by remember { mutableStateOf(false) }
+    Box(modifier = Modifier.width(220.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .background(if (isFocused) BbAccent.copy(alpha = 0.1f) else BbCard)
+                .then(
+                    if (isFocused) Modifier.border(2.dp, BbAccent, RoundedCornerShape(8.dp))
+                    else Modifier
+                )
+                .clickable { expanded = true }
+                .focusable()
+                .onFocusChanged { isFocused = it.isFocused }
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = selectedCategory?.title ?: "All Categories",
+                color = BbTextPrimary,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            Icon(
+                imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                contentDescription = "Toggle categories",
+                tint = BbTextSecondary
+            )
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.background(BbSurface)
+        ) {
+            categories.forEach { cat ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text = cat.title,
+                            color = if (cat.id == selectedCategory?.id) BbAccent else BbTextPrimary,
+                            fontWeight = if (cat.id == selectedCategory?.id) FontWeight.Bold else FontWeight.Normal
+                        )
+                    },
+                    onClick = {
+                        onCategorySelected(cat)
+                        expanded = false
+                    }
+                )
             }
         }
     }

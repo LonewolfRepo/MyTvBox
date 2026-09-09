@@ -38,7 +38,9 @@ data class HomeUiState(
     val isLoading: Boolean = false,
     val activeServerName: String = "",
     val hero: PortalVodItem? = null,
-    val rows: List<HomeRow> = emptyList()
+    val rows: List<HomeRow> = emptyList(),
+    val categories: List<PortalCategory> = emptyList(),
+    val selectedCategory: PortalCategory? = null
 )
 
 @HiltViewModel
@@ -166,24 +168,35 @@ class HomeViewModel @Inject constructor(
         val p = prefs.activeProfileIdFlow.firstOrNull() ?: -1
         val s = sessionManager.activePortal.value?.serverId ?: 0
 
+        val allCategories = portalService.fetchVodCategories().getOrDefault(emptyList())
+        // FIX: Removal of Censored categories from Home
+        val uncensoredCategories = allCategories.filter { !it.isCensored }
+
         // Read the Home category order/visibility setting and remember its signature
         val rawOrder = settings.getString(p, s, "order_home", "")
         lastAppliedHomeOrder = rawOrder
 
-        val recentPage = portalService.fetchVodList(categoryId = "*", page = 1, pageSize = 15)
-            .getOrDefault(PortalPage(emptyList(), 0))
-        val categories = portalService.fetchVodCategories().getOrDefault(emptyList())
-
-        // Respect Home Category Settings:
-        //  - only categories marked visible are kept
-        //  - kept categories stay in the exact configured order
-        val orderedVisible = CategorySortHelper.applyToCategories(categories, rawOrder)
+        val orderedVisible = CategorySortHelper.applyToCategories(uncensoredCategories, rawOrder)
             .filter { it.id != "*" && it.id != "0" }
 
         _allCategories.value = orderedVisible
-        val initialBatch = orderedVisible.take(5)
+
+        val allCat = PortalCategory(id = "*", title = "All Categories", alias = "all", isCensored = false)
+        val categoriesWithAll = listOf(allCat) + orderedVisible
+
+        _uiState.update { it.copy(categories = categoriesWithAll, selectedCategory = allCat) }
+
+        loadDefaultHomeRows()
+    }
+
+    private suspend fun loadDefaultHomeRows() {
+        _uiState.update { it.copy(isLoading = true) }
+        val recentPage = portalService.fetchVodList(categoryId = "*", page = 1, pageSize = 15)
+            .getOrDefault(PortalPage(emptyList(), 0))
+
+        val initialBatch = _allCategories.value.take(5)
         _visibleCategories.value = initialBatch
-        _hasMoreCategories.value = orderedVisible.size > 5
+        _hasMoreCategories.value = _allCategories.value.size > 5
 
         val categoryRows = coroutineScope {
             initialBatch.map { category ->
@@ -219,6 +232,35 @@ class HomeViewModel @Inject constructor(
             addAll(categoryRows)
         }
         _uiState.update { it.copy(isLoading = false, hero = recentPage.items.firstOrNull(), rows = allRows) }
+    }
+
+    fun selectCategory(category: PortalCategory) {
+        _uiState.update { it.copy(selectedCategory = category) }
+        viewModelScope.launch {
+            if (category.id == "*" || category.id == "0") {
+                loadDefaultHomeRows()
+            } else {
+                loadCategoryContent(category)
+            }
+        }
+    }
+
+    private suspend fun loadCategoryContent(category: PortalCategory) {
+        _uiState.update { it.copy(isLoading = true, hero = null) }
+        _hasMoreCategories.value = false
+
+        val page = portalService.fetchVodList(category.id, 1, 14)
+            .getOrDefault(PortalPage(emptyList(), 0))
+
+        val row = HomeRow(
+            id = category.id,
+            title = category.title,
+            items = page.items,
+            currentPage = 1,
+            hasMore = page.items.size >= 14
+        )
+
+        _uiState.update { it.copy(isLoading = false, rows = listOf(row)) }
     }
 
     fun loadMoreCategories() {
@@ -258,7 +300,6 @@ class HomeViewModel @Inject constructor(
                 state.copy(rows = state.rows.map { if (it.id == rowId) it.copy(isLoadingPage = true) else it })
             }
             val nextPage = currentRow.currentPage + 1
-            val categoryId = if (rowId == "*") "*" else rowId
             val page = portalService.fetchVodList(rowId, nextPage, 14)
                 .getOrDefault(PortalPage(emptyList(), 0))
             _uiState.update { state ->
