@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.itv.blockbuster.data.local.UserPreferencesRepository
 import com.itv.blockbuster.data.player.PlaybackManager
 import com.itv.blockbuster.data.repository.LiveTvRepository
+import com.itv.blockbuster.data.repository.RecentRepository
 import com.itv.blockbuster.data.session.StalkerSessionManager
 import com.itv.blockbuster.domain.model.EpgProgram
 import com.itv.blockbuster.domain.model.PortalCategory
@@ -14,6 +15,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -32,12 +34,15 @@ data class GuideUiState(
     val nowMin: Int = 0,
     val clock: String = "",
     val previewChannel: PortalChannel? = null,
-    val previewUrl: String? = null
+    val previewUrl: String? = null,
+    // NEW: channel the guide should land on (last played live channel)
+    val lastPlayedChannelId: String? = null
 )
 
 @HiltViewModel
 class TvGuideViewModel @Inject constructor(
     private val liveTvRepository: LiveTvRepository,
+    private val recentRepository: RecentRepository, // NEW
     private val prefs: UserPreferencesRepository,
     private val sessionManager: StalkerSessionManager,
     val playbackManager: PlaybackManager
@@ -75,15 +80,32 @@ class TvGuideViewModel @Inject constructor(
         val isAll = default == null || default.id == "*" || default.id == "0" || default.id == "all"
         val filteredChannels = if (isAll) allChannels else allChannels.filter { it.genreId == default?.id }
 
+        // NEW: resolve last played live channel — active playback session first,
+        // then the most recent LIVE entry from Recents (survives app restarts).
+        val p = prefs.activeProfileIdFlow.first()
+        val s = sessionManager.activePortal.value?.serverId ?: 0
+        val sessionChannelId = playbackManager.currentChannel?.id
+        val recentChannelId = recentRepository.getRecents(p, s)
+            .first()
+            .firstOrNull { it.type == "LIVE" }
+            ?.itemId
+        val lastPlayedId = sessionChannelId ?: recentChannelId
+
         _uiState.update {
             it.copy(
                 isLoading = false,
                 categories = cats,
                 selectedCategory = default,
                 allChannels = allChannels,
-                channels = filteredChannels
+                channels = filteredChannels,
+                lastPlayedChannelId = lastPlayedId
             )
         }
+
+        // NEW: auto-preview the last played channel so the top-left player resumes it
+        val lastChannel = filteredChannels.firstOrNull { it.id == lastPlayedId }
+            ?: allChannels.firstOrNull { it.id == lastPlayedId }
+        if (lastChannel != null) selectForPreview(lastChannel)
     }
 
     fun selectCategory(category: PortalCategory) {
@@ -102,6 +124,11 @@ class TvGuideViewModel @Inject constructor(
 
     fun selectForPreview(channel: PortalChannel) {
         viewModelScope.launch {
+            // NEW: don't restart the stream if this channel is already previewing
+            if (_uiState.value.previewChannel?.id == channel.id &&
+                !_uiState.value.previewUrl.isNullOrEmpty()
+            ) return@launch
+
             _uiState.update { it.copy(previewChannel = channel, previewUrl = null) }
             val url = liveTvRepository.createStreamLink(channel.cmd).getOrDefault("")
             val epg = liveTvRepository.getShortEpgCached(channel.id)

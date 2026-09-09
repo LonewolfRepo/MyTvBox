@@ -1,11 +1,12 @@
 package com.itv.blockbuster.ui.guide
 
+import android.view.TextureView
 import android.view.ViewGroup
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,12 +23,28 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Numbers
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -36,9 +53,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -48,37 +69,29 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
 import com.itv.blockbuster.domain.model.EpgProgram
+import com.itv.blockbuster.domain.model.PortalCategory
 import com.itv.blockbuster.domain.model.PortalChannel
+import com.itv.blockbuster.ui.livetv.SortMode
 import com.itv.blockbuster.ui.navigation.FormFactor
 import com.itv.blockbuster.ui.navigation.rememberFormFactor
 import com.itv.blockbuster.ui.theme.BbAccent
 import com.itv.blockbuster.ui.theme.BbBackground
 import com.itv.blockbuster.ui.theme.BbCard
-import com.itv.blockbuster.ui.theme.BbCardHover
 import com.itv.blockbuster.ui.theme.BbSurface
 import com.itv.blockbuster.ui.theme.BbTextMuted
 import com.itv.blockbuster.ui.theme.BbTextPrimary
 import com.itv.blockbuster.ui.theme.BbTextSecondary
+import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
 
-// =====================================================================
-// HELPERS
-// =====================================================================
-
-private const val WINDOW_MIN = 180
-private val ROW_HEIGHT = 64.dp
-private val CHANNEL_COL = 220.dp
-
-private fun parseMinutes(t: String): Int {
-    val parts = t.split(":")
-    return (parts.getOrNull(0)?.toIntOrNull() ?: 0) * 60 + (parts.getOrNull(1)?.toIntOrNull() ?: 0)
-}
-
-// =====================================================================
-// SCREEN
-// =====================================================================
+private val CHANNEL_COL_TV = 260.dp
+private val CHANNEL_COL_PORTRAIT = 150.dp
+private val ROW_HEIGHT = 56.dp
+private const val WINDOW_MIN = 240 // 4 hours visible window
+private val PLAYER_WIDTH_TV = 300.dp
+private val PLAYER_WIDTH_PORTRAIT = 170.dp
 
 @Composable
 fun TvGuideScreen(
@@ -89,137 +102,306 @@ fun TvGuideScreen(
     val state by viewModel.uiState.collectAsState()
     val formFactor = rememberFormFactor()
     val isPortrait = formFactor == FormFactor.MOBILE_PORTRAIT
-
-    val pxPerMin = if (isPortrait) 3.dp else 5.dp
+    val pxPerMin = if (isPortrait) 2.5.dp else 5.dp
+    val channelCol = if (isPortrait) CHANNEL_COL_PORTRAIT else CHANNEL_COL_TV
     val gridStart = (state.nowMin / 30) * 30
 
-    Box(modifier = Modifier.fillMaxSize().background(BbBackground)) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            // ── Top bar ──
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically
+    var searchQuery by remember { mutableStateOf("") }
+    var sortMode by remember { mutableStateOf(SortMode.DEFAULT) }
+    val listState = rememberLazyListState()
+    val configuration = LocalConfiguration.current
+    val dropdownWidth = (configuration.screenWidthDp.dp * 0.28f)
+
+    // Search + Sort pipeline (category filtering is handled by the ViewModel)
+    val searchFiltered = if (searchQuery.isBlank()) state.channels else run {
+        val q = searchQuery.trim().lowercase()
+        state.channels.filter {
+            it.name.lowercase().contains(q) ||
+                    it.number.lowercase().contains(q) ||
+                    it.nowPlaying.lowercase().contains(q)
+        }
+    }
+    val guideChannels = when (sortMode) {
+        SortMode.DEFAULT -> searchFiltered
+        SortMode.A_Z -> searchFiltered.sortedBy { it.name.lowercase() }
+        SortMode.Z_A -> searchFiltered.sortedByDescending { it.name.lowercase() }
+        SortMode.NUMERIC -> searchFiltered.sortedWith(
+            compareBy(
+                { it.number.toDoubleOrNull() ?: Double.MAX_VALUE },
+                { it.number }
+            )
+        )
+    }
+
+    // LAND ON LAST PLAYED CHANNEL: scroll grid to it once channels are ready
+    LaunchedEffect(state.lastPlayedChannelId, guideChannels.size) {
+        val id = state.lastPlayedChannelId ?: return@LaunchedEffect
+        val index = guideChannels.indexOfFirst { it.id == id }
+        if (index >= 0) listState.scrollToItem(index)
+    }
+
+    // Pause preview when leaving the guide (unless handed to fullscreen player)
+    DisposableEffect(Unit) {
+        onDispose {
+            if (!viewModel.playbackManager.isFullscreenActive) {
+                viewModel.playbackManager.player.pause()
+            }
+        }
+    }
+
+    val preview = state.previewChannel
+    val previewPrograms = preview?.let { state.epg[it.id] } ?: emptyList()
+    val nowProgram = previewPrograms.firstOrNull {
+        parseMinutes(it.time) <= state.nowMin && parseMinutes(it.time) + it.duration > state.nowMin
+    } ?: previewPrograms.firstOrNull()
+
+    Column(Modifier.fillMaxSize().background(BbBackground)) {
+        // ── Top bar: player (top-left) + now-playing info + filters ──
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = if (isPortrait) 12.dp else 24.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // 1) PLAYER TOP-LEFT
+            Box(
+                modifier = Modifier
+                    .width(if (isPortrait) PLAYER_WIDTH_PORTRAIT else PLAYER_WIDTH_TV)
+                    .aspectRatio(16f / 9f)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color.Black)
+                    .then(
+                        if (preview != null) Modifier.border(2.dp, BbAccent, RoundedCornerShape(8.dp))
+                        else Modifier
+                    )
+                    .clickable {
+                        // Tap player -> fullscreen current preview
+                        val url = state.previewUrl
+                        if (url != null && preview != null) onPlayLive(url, preview.id)
+                    }
             ) {
-                Text("TV Guide", color = BbTextPrimary, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.weight(1f))
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(BbCard)
-                        .padding(horizontal = 12.dp, vertical = 6.dp)
-                ) {
+                AndroidView(
+                    factory = { ctx ->
+                        TextureView(ctx).apply {
+                            layoutParams = ViewGroup.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.MATCH_PARENT
+                            )
+                        }
+                    },
+                    update = { view ->
+                        if (!viewModel.playbackManager.isFullscreenActive) {
+                            viewModel.playbackManager.player.setVideoTextureView(view)
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+                if (preview == null) {
+                    Text(
+                        "No preview",
+                        color = BbTextMuted,
+                        fontSize = 11.sp,
+                        modifier = Modifier.align(Alignment.Center)
+                    )
+                }
+            }
+
+            Spacer(Modifier.width(16.dp))
+
+            // 2) NOW PLAYING INFO
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (preview?.logoUrl?.isNotEmpty() == true) {
+                        AsyncImage(
+                            model = preview.logoUrl,
+                            contentDescription = null,
+                            modifier = Modifier.size(28.dp),
+                            contentScale = ContentScale.Fit
+                        )
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text(
+                        text = preview?.name ?: "Select a channel",
+                        color = BbTextPrimary,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(Modifier.width(12.dp))
                     Text(state.clock, color = BbTextSecondary, fontSize = 14.sp)
                 }
-            }
-
-            // ── Time header ──
-            Row(modifier = Modifier.fillMaxWidth()) {
-                Spacer(Modifier.width(CHANNEL_COL))
-                Box(Modifier.width(pxPerMin * WINDOW_MIN).height(28.dp)) {
-                    var m = 0
-                    while (m <= WINDOW_MIN) {
-                        val labelMin = gridStart + m
-                        val cal = Calendar.getInstance().apply {
-                            set(Calendar.HOUR_OF_DAY, labelMin / 60 % 24)
-                            set(Calendar.MINUTE, labelMin % 60)
-                        }
+                if (preview != null && nowProgram != null) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            SimpleDateFormat("h:mm a", Locale.US).format(cal.time),
-                            color = BbTextMuted,
-                            fontSize = 11.sp,
-                            modifier = Modifier.offset(x = pxPerMin * m)
+                            text = nowProgram.name,
+                            color = BbTextSecondary,
+                            fontSize = 13.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
-                        m += 30
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            text = "${formatMin(parseMinutes(nowProgram.time))} - " +
+                                    formatMin(parseMinutes(nowProgram.time) + nowProgram.duration),
+                            color = BbTextMuted,
+                            fontSize = 12.sp
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Text("● Live", color = BbAccent, fontSize = 12.sp)
                     }
                 }
             }
-            HorizontalDivider(color = BbCard)
 
-            // ── Grid rows ──
-            if (state.isLoading) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = BbAccent)
+            // 3) SEARCH / SORT / CATEGORY (same pattern as Live TV)
+            if (!isPortrait) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    modifier = Modifier.width(220.dp),
+                    placeholder = { Text("Search channels...", color = BbTextMuted) },
+                    leadingIcon = { Icon(Icons.Default.Search, null, tint = BbTextMuted) },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = BbAccent,
+                        unfocusedBorderColor = BbTextMuted.copy(alpha = 0.3f),
+                        cursorColor = BbAccent,
+                        focusedTextColor = BbTextPrimary,
+                        unfocusedTextColor = BbTextPrimary
+                    ),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                Spacer(Modifier.width(12.dp))
+            }
+            SortIconButton(mode = sortMode) {
+                sortMode = when (sortMode) {
+                    SortMode.DEFAULT -> SortMode.A_Z
+                    SortMode.A_Z -> SortMode.Z_A
+                    SortMode.Z_A -> SortMode.NUMERIC
+                    SortMode.NUMERIC -> SortMode.DEFAULT
                 }
-            } else {
-                LazyColumn(modifier = Modifier.fillMaxSize()) {
-                    items(state.channels, key = { it.id }) { channel ->
-                        GuideChannelRow(
-                            channel = channel,
-                            programs = state.epg[channel.id] ?: emptyList(),
-                            gridStart = gridStart,
-                            nowMin = state.nowMin,
-                            pxPerMin = pxPerMin,
-                            isPortrait = isPortrait,
-                            isPreviewing = state.previewChannel?.id == channel.id,
-                            onPreview = { viewModel.selectForPreview(channel) },
-                            onProgramClick = { program ->
-                                val isCurrent = parseMinutes(program.time) <= state.nowMin &&
-                                        parseMinutes(program.time) + program.duration > state.nowMin
-                                when {
-                                    isCurrent -> {
-                                        viewModel.selectForPreview(channel)
-                                        state.previewUrl?.let { onPlayLive(it, channel.id) }
-                                    }
-                                    program.hasArchive && !program.cmd.isNullOrEmpty() -> {
-                                        viewModel.playArchive(program) { url -> onPlayLive(url, channel.id) }
-                                    }
-                                    else -> onOpenCatchup(channel.id)
-                                }
-                            }
-                        )
-                        viewModel.ensureEpg(channel.id)
-                    }
-                }
+            }
+            Spacer(Modifier.width(12.dp))
+            Box(modifier = Modifier.width(if (isPortrait) 140.dp else dropdownWidth)) {
+                CategoryDropdown(
+                    categories = state.categories,
+                    selectedCategory = state.selectedCategory,
+                    onCategorySelected = { viewModel.selectCategory(it) }
+                )
             }
         }
 
-        // ── PiP preview overlay ──
-        if (state.previewChannel != null) {
-            Column(
+        // Portrait: search field on its own row
+        if (isPortrait) {
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
                 modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 56.dp, end = 24.dp)
-                    .width(if (isPortrait) 180.dp else 280.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(16f / 9f)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(Color.Black)
-                        .border(2.dp, BbAccent, RoundedCornerShape(8.dp))
-                        .clickable {
-                            state.previewUrl?.let { onPlayLive(it, state.previewChannel!!.id) }
-                        }
-                ) {
-                    AndroidView(
-                        factory = { ctx ->
-                            android.view.TextureView(ctx).apply {
-                                layoutParams = ViewGroup.LayoutParams(
-                                    ViewGroup.LayoutParams.MATCH_PARENT,
-                                    ViewGroup.LayoutParams.MATCH_PARENT
-                                )
-                            }
-                        },
-                        update = { view ->
-                            if (!viewModel.playbackManager.isFullscreenActive) {
-                                viewModel.playbackManager.player.setVideoTextureView(view)
-                            }
-                        },
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
-                Column(modifier = Modifier.padding(top = 6.dp)) {
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp),
+                placeholder = { Text("Search channels...", color = BbTextMuted) },
+                leadingIcon = { Icon(Icons.Default.Search, null, tint = BbTextMuted) },
+                singleLine = true,
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = BbAccent,
+                    unfocusedBorderColor = BbTextMuted.copy(alpha = 0.3f),
+                    cursorColor = BbAccent,
+                    focusedTextColor = BbTextPrimary,
+                    unfocusedTextColor = BbTextPrimary
+                ),
+                shape = RoundedCornerShape(8.dp)
+            )
+        }
+
+        // ── Time header ──
+        Row(Modifier.fillMaxWidth()) {
+            Spacer(Modifier.width(channelCol))
+            Box(Modifier.fillMaxWidth().height(28.dp)) {
+                var m = 0
+                while (m <= WINDOW_MIN) {
                     Text(
-                        state.previewChannel!!.name,
-                        color = BbTextPrimary, fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis
+                        text = formatMin(gridStart + m),
+                        color = BbTextMuted,
+                        fontSize = 11.sp,
+                        modifier = Modifier.offset(x = pxPerMin * m)
                     )
-                    val now = state.epg[state.previewChannel!!.id]?.firstOrNull()
-                    if (now != null) {
-                        Text("Now: ${now.name}", color = BbTextSecondary, fontSize = 11.sp, maxLines = 1)
+                    m += 30
+                }
+            }
+        }
+        HorizontalDivider(color = BbCard)
+
+        // ── Guide grid + playhead overlay ──
+        Box(Modifier.weight(1f)) {
+            when {
+                state.isLoading -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = BbAccent)
                     }
-                    Text("● Live", color = BbAccent, fontSize = 11.sp)
+                }
+                guideChannels.isEmpty() -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("No channels in this category", color = BbTextMuted)
+                    }
+                }
+                else -> {
+                    LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+                        items(guideChannels, key = { it.id }) { channel ->
+                            val index = guideChannels.indexOf(channel)
+                            GuideChannelRow(
+                                index = index,
+                                channel = channel,
+                                programs = state.epg[channel.id] ?: emptyList(),
+                                gridStart = gridStart,
+                                nowMin = state.nowMin,
+                                pxPerMin = pxPerMin,
+                                channelCol = channelCol,
+                                isPreviewing = state.previewChannel?.id == channel.id,
+                                requestInitialFocus = channel.id == state.lastPlayedChannelId,
+                                onChannelClick = {
+                                    // CLICK ON CHANNEL CURRENTLY PLAYING -> FULLSCREEN
+                                    if (state.previewChannel?.id == channel.id &&
+                                        !state.previewUrl.isNullOrEmpty()
+                                    ) {
+                                        onPlayLive(state.previewUrl!!, channel.id)
+                                    } else {
+                                        viewModel.selectForPreview(channel)
+                                    }
+                                },
+                                onProgramClick = { program ->
+                                    val start = parseMinutes(program.time)
+                                    val isCurrent = start <= state.nowMin &&
+                                            start + program.duration > state.nowMin
+                                    when {
+                                        isCurrent -> {
+                                            if (state.previewChannel?.id == channel.id &&
+                                                !state.previewUrl.isNullOrEmpty()
+                                            ) {
+                                                onPlayLive(state.previewUrl!!, channel.id)
+                                            } else {
+                                                viewModel.selectForPreview(channel)
+                                            }
+                                        }
+                                        program.hasArchive && !program.cmd.isNullOrEmpty() ->
+                                            viewModel.playArchive(program) { url -> onPlayLive(url, channel.id) }
+                                        else -> onOpenCatchup(channel.id)
+                                    }
+                                }
+                            )
+                            viewModel.ensureEpg(channel.id)
+                        }
+                    }
+
+                    // Current-time playhead line over the grid
+                    Canvas(Modifier.matchParentSize()) {
+                        val x = (channelCol + pxPerMin * (state.nowMin - gridStart)).toPx()
+                        drawLine(
+                            color = BbAccent,
+                            start = Offset(x, 0f),
+                            end = Offset(x, size.height),
+                            strokeWidth = 3f
+                        )
+                    }
                 }
             }
         }
@@ -227,114 +409,238 @@ fun TvGuideScreen(
 }
 
 // =====================================================================
-// GRID ROW
+// GUIDE ROW: channel cell + program strip
 // =====================================================================
-
 @Composable
 private fun GuideChannelRow(
+    index: Int,
     channel: PortalChannel,
     programs: List<EpgProgram>,
     gridStart: Int,
     nowMin: Int,
     pxPerMin: Dp,
-    isPortrait: Boolean,
+    channelCol: Dp,
     isPreviewing: Boolean,
-    onPreview: () -> Unit,
+    requestInitialFocus: Boolean,
+    onChannelClick: () -> Unit,
     onProgramClick: (EpgProgram) -> Unit
 ) {
-    Row(modifier = Modifier.fillMaxWidth().height(ROW_HEIGHT)) {
-        // Channel cell
-        var chFocused by remember { mutableStateOf(false) }
-        Row(
-            modifier = Modifier
-                .width(CHANNEL_COL)
-                .fillMaxHeight()
-                .clip(RoundedCornerShape(6.dp))
-                .background(
-                    when {
-                        isPreviewing -> BbAccent.copy(alpha = 0.2f)
-                        chFocused -> BbCardHover
-                        else -> BbSurface
-                    }
-                )
-                .then(if (chFocused) Modifier.border(2.dp, BbAccent, RoundedCornerShape(6.dp)) else Modifier)
-                .clickable(onClick = onPreview)
-                .focusable()
-                .onFocusChanged { state -> chFocused = state.isFocused }
-                .padding(horizontal = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier.size(36.dp).clip(RoundedCornerShape(6.dp)).background(BbCard),
-                contentAlignment = Alignment.Center
-            ) {
-                if (channel.logoUrl.isNotEmpty()) {
-                    AsyncImage(
-                        model = channel.logoUrl, contentDescription = null,
-                        modifier = Modifier.fillMaxSize().padding(3.dp),
-                        contentScale = ContentScale.Fit
-                    )
-                } else {
-                    Text(
-                        channel.number.ifEmpty { channel.id.take(3) },
-                        color = BbTextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-            Spacer(Modifier.width(8.dp))
-            Text(
-                channel.name, color = BbTextPrimary, fontSize = 12.sp,
-                maxLines = 1, overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
-            )
-        }
+    val channelFocusRequester = remember { FocusRequester() }
+    var channelFocused by remember { mutableStateOf(false) }
 
-        // Programs area
-        val scrollState = rememberScrollState()
-        Box(
-            Modifier
-                .width(pxPerMin * WINDOW_MIN)
-                .fillMaxHeight()
-                .then(if (isPortrait) Modifier.horizontalScroll(scrollState) else Modifier)
-        ) {
-            programs.forEach { program ->
-                var pFocused by remember { mutableStateOf(false) }
-                val start = parseMinutes(program.time)
-                val end = start + program.duration
-                if (end > gridStart && start < gridStart + WINDOW_MIN) {
-                    val x = (start.coerceAtLeast(gridStart) - gridStart)
-                    val w = (end.coerceAtMost(gridStart + WINDOW_MIN) - start.coerceAtLeast(gridStart))
-                    Box(
-                        modifier = Modifier
-                            .offset(x = pxPerMin * x)
-                            .width((w * pxPerMin.value).dp.coerceAtLeast(48.dp))
-                            .fillMaxHeight()
-                            .padding(2.dp)
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(if (pFocused) BbCardHover else BbCard)
-                            .then(if (pFocused) Modifier.border(2.dp, BbAccent, RoundedCornerShape(4.dp)) else Modifier)
-                            .clickable { onProgramClick(program) }
-                            .focusable()
-                            .onFocusChanged { state -> pFocused = state.isFocused }
-                            .padding(4.dp)
-                    ) {
-                        Text(
-                            program.name, color = BbTextPrimary, fontSize = 11.sp,
-                            maxLines = 2, overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-            }
-            // Now line
-            val nowOffset = (nowMin - gridStart).coerceIn(0, WINDOW_MIN)
-            Box(
-                Modifier
-                    .offset(x = pxPerMin * nowOffset)
-                    .width(2.dp)
-                    .fillMaxHeight()
-                    .background(BbAccent)
-            )
+    // Focus the last-played channel row once it is composed
+    LaunchedEffect(requestInitialFocus) {
+        if (requestInitialFocus) {
+            delay(150)
+            runCatching { channelFocusRequester.requestFocus() }
         }
     }
-    HorizontalDivider(color = BbCard, thickness = 0.5.dp)
+
+    Row(Modifier.fillMaxWidth().height(ROW_HEIGHT)) {
+        // ── Channel cell ──
+        Row(
+            modifier = Modifier
+                .width(channelCol)
+                .fillMaxHeight()
+                .background(
+                    if (isPreviewing) BbAccent.copy(alpha = 0.15f)
+                    else BbCard.copy(alpha = 0.35f)
+                )
+                .then(
+                    if (channelFocused) Modifier.border(2.dp, BbAccent, RoundedCornerShape(6.dp))
+                    else Modifier
+                )
+                .clickable(onClick = onChannelClick)
+                .focusRequester(channelFocusRequester)
+                .focusable()
+                .onFocusChanged { channelFocused = it.isFocused }
+                .padding(horizontal = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("${index + 1}", color = BbTextMuted, fontSize = 12.sp, modifier = Modifier.width(24.dp))
+            if (channel.logoUrl.isNotEmpty()) {
+                AsyncImage(
+                    model = channel.logoUrl,
+                    contentDescription = null,
+                    modifier = Modifier.size(26.dp),
+                    contentScale = ContentScale.Fit
+                )
+                Spacer(Modifier.width(8.dp))
+            }
+            Text(
+                text = channel.name,
+                color = if (isPreviewing) BbAccent else BbTextPrimary,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            if (isPreviewing) {
+                Icon(Icons.Default.PlayArrow, null, tint = BbAccent, modifier = Modifier.size(16.dp))
+            }
+        }
+
+        // ── Program strip ──
+        Box(Modifier.weight(1f).fillMaxHeight()) {
+            programs.forEach { program ->
+                var start = parseMinutes(program.time)
+                // Midnight-wrap normalization relative to the grid window
+                if (start - gridStart > 12 * 60) start -= 24 * 60
+                if (gridStart - start > 12 * 60) start += 24 * 60
+                val end = start + program.duration
+                if (end <= gridStart || start >= gridStart + WINDOW_MIN) return@forEach
+
+                // FIX: Dp must be the first operand (Dp * Int is valid, Int * Dp is not)
+                val x = pxPerMin * (start - gridStart).coerceAtLeast(0)
+                val w = pxPerMin * program.duration.coerceAtLeast(15)
+
+                ProgramCell(
+                    program = program,
+                    modifier = Modifier
+                        .offset(x = x)
+                        .width(w)
+                        .fillMaxHeight()
+                        .padding(vertical = 4.dp, horizontal = 2.dp),
+                    onClick = { onProgramClick(program) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProgramCell(
+    program: EpgProgram,
+    modifier: Modifier,
+    onClick: () -> Unit
+) {
+    var focused by remember { mutableStateOf(false) }
+    Box(
+        modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(if (focused) BbAccent.copy(alpha = 0.25f) else BbCard.copy(alpha = 0.6f))
+            .then(
+                if (focused) Modifier.border(2.dp, BbAccent, RoundedCornerShape(6.dp))
+                else Modifier
+            )
+            .clickable(onClick = onClick)
+            .focusable()
+            .onFocusChanged { focused = it.isFocused }
+            .padding(horizontal = 8.dp),
+        contentAlignment = Alignment.CenterStart
+    ) {
+        Text(
+            text = program.name,
+            color = if (focused) BbTextPrimary else BbTextSecondary,
+            fontSize = 13.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+// =====================================================================
+// TOP BAR CONTROLS (same pattern as Live TV)
+// =====================================================================
+@Composable
+private fun SortIconButton(mode: SortMode, onClick: () -> Unit) {
+    var isFocused by remember { mutableStateOf(false) }
+    val (icon, contentDesc) = when (mode) {
+        SortMode.DEFAULT -> Icons.Default.Sort to "Sort: Default"
+        SortMode.A_Z -> Icons.Default.ArrowUpward to "Sort: A to Z"
+        SortMode.Z_A -> Icons.Default.ArrowDownward to "Sort: Z to A"
+        SortMode.NUMERIC -> Icons.Default.Numbers to "Sort: Numeric"
+    }
+    Box(
+        modifier = Modifier
+            .size(48.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (isFocused) BbAccent.copy(alpha = 0.1f) else BbCard)
+            .then(if (isFocused) Modifier.border(2.dp, BbAccent, RoundedCornerShape(8.dp)) else Modifier)
+            .clickable(onClick = onClick)
+            .focusable()
+            .onFocusChanged { isFocused = it.isFocused },
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(imageVector = icon, contentDescription = contentDesc, tint = if (isFocused) BbAccent else BbTextSecondary)
+    }
+}
+
+@Composable
+private fun CategoryDropdown(
+    categories: List<PortalCategory>,
+    selectedCategory: PortalCategory?,
+    onCategorySelected: (PortalCategory) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    var isFocused by remember { mutableStateOf(false) }
+    Box {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .background(if (isFocused) BbAccent.copy(alpha = 0.1f) else BbCard)
+                .then(if (isFocused) Modifier.border(2.dp, BbAccent, RoundedCornerShape(8.dp)) else Modifier)
+                .clickable { expanded = true }
+                .focusable()
+                .onFocusChanged { isFocused = it.isFocused }
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = selectedCategory?.title ?: "All Categories",
+                color = BbTextPrimary,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            Icon(
+                imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                contentDescription = "Toggle categories",
+                tint = BbTextSecondary
+            )
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.background(BbSurface)
+        ) {
+            categories.forEach { cat ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text = cat.title,
+                            color = if (cat.id == selectedCategory?.id) BbAccent else BbTextPrimary,
+                            fontWeight = if (cat.id == selectedCategory?.id) FontWeight.Bold else FontWeight.Normal
+                        )
+                    },
+                    onClick = {
+                        onCategorySelected(cat)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+// =====================================================================
+// HELPERS
+// =====================================================================
+private fun parseMinutes(t: String): Int {
+    val timePart = t.substringAfter(' ').trim()
+    val parts = timePart.split(':')
+    return (parts.getOrNull(0)?.toIntOrNull() ?: 0) * 60 + (parts.getOrNull(1)?.toIntOrNull() ?: 0)
+}
+
+private fun formatMin(total: Int): String {
+    val cal = Calendar.getInstance().apply {
+        set(Calendar.HOUR_OF_DAY, (total / 60) % 24)
+        set(Calendar.MINUTE, total % 60)
+    }
+    return SimpleDateFormat("h:mm a", Locale.US).format(cal.time)
 }
