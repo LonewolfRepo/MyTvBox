@@ -117,10 +117,6 @@ class StalkerPortalService @Inject constructor(
             throw IOException(errorMessage)
         }
         session.setAjaxLoader("$cleanHost${detectedPath}server/load.php")
-
-        // NEW: Save parent password for Adult section verification
-        session.setParentPassword(profileResponse.js.parentPassword ?: "")
-
         PortalConnectionResult(
             portalPath = detectedPath,
             token = handshakeToken,

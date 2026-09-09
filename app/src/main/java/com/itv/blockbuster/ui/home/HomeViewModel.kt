@@ -1,6 +1,5 @@
 package com.itv.blockbuster.ui.home
 
-import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.itv.blockbuster.data.local.SettingsRepository
@@ -58,8 +57,7 @@ class HomeViewModel @Inject constructor(
     private val vodRepository: VodRepository,
     private val sessionManager: StalkerSessionManager,
     private val prefs: UserPreferencesRepository,
-    private val settings: SettingsRepository,
-    savedStateHandle: SavedStateHandle
+    private val settings: SettingsRepository
 ) : ViewModel() {
 
     companion object {
@@ -67,9 +65,6 @@ class HomeViewModel @Inject constructor(
         // keystroke before hitting the portal. Clearing the field bypasses this.
         const val SEARCH_DEBOUNCE_MS = 800L
     }
-
-    // FIX: Read navigation argument to invert filters for Adult mode
-    private val censoredOnly: Boolean = savedStateHandle.get<Boolean>("censoredOnly") ?: false
 
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
@@ -94,8 +89,12 @@ class HomeViewModel @Inject constructor(
     // NEW: pending debounced search; cancelled on every new keystroke
     private var searchJob: Job? = null
 
-    // FIX: Invert filter based on censoredOnly flag
-    private fun List<PortalVodItem>.visible(): List<PortalVodItem> = filter { it.isCensored == censoredOnly }
+    /**
+     * NEW: Censored (adult) items are stripped at the page level (Home, Movies,
+     * TV Shows) instead of in VodRepository, so a dedicated Censored page can
+     * reuse the raw repository data later.
+     */
+    private fun List<PortalVodItem>.visible(): List<PortalVodItem> = filter { !it.isCensored }
 
     init {
         viewModelScope.launch {
@@ -142,7 +141,6 @@ class HomeViewModel @Inject constructor(
     }
 
     fun toggleFavorite(item: PortalVodItem) {
-        if (censoredOnly) return // Block favorites in adult mode
         viewModelScope.launch {
             val p = prefs.activeProfileIdFlow.firstOrNull() ?: return@launch
             val s = sessionManager.activePortal.value?.serverId ?: 0
@@ -201,9 +199,8 @@ class HomeViewModel @Inject constructor(
         val categories = portalService.fetchVodCategories().getOrDefault(emptyList())
         val genres = portalService.fetchVodGenres().getOrDefault(emptyList())
 
-        // FIX: Invert category/genre filtering based on censoredOnly
-        val uncensoredCategories = categories.filter { it.isCensored == censoredOnly }
-        val uncensoredGenres = genres.filter { it.isCensored == censoredOnly }
+        val uncensoredCategories = categories.filter { !it.isCensored }
+        val uncensoredGenres = genres.filter { !it.isCensored }
 
         // Respect Home Category Settings:
         //  - only categories marked visible are kept
@@ -216,10 +213,10 @@ class HomeViewModel @Inject constructor(
         _visibleCategories.value = initialBatch
         _hasMoreCategories.value = orderedVisible.size > 5
 
-        val allCat = PortalCategory(id = "*", title = "All Categories", alias = "all", isCensored = censoredOnly)
+        val allCat = PortalCategory(id = "*", title = "All Categories", alias = "all", isCensored = false)
         val categoriesWithAll = listOf(allCat) + orderedVisible
 
-        val allGenre = PortalCategory(id = "*", title = "All Genres", alias = "all", isCensored = censoredOnly)
+        val allGenre = PortalCategory(id = "*", title = "All Genres", alias = "all", isCensored = false)
         val genresWithAll = listOf(allGenre) + uncensoredGenres
 
         _uiState.update {
@@ -399,7 +396,6 @@ class HomeViewModel @Inject constructor(
         if (selectedCat == null || (selectedCat.id != "*" && selectedCat.id != "0")) return
         // NEW: never vertically paginate while a search is active
         if (_uiState.value.searchQuery.isNotBlank()) return
-
         viewModelScope.launch {
             _isLoadingMoreCategories.value = true
             val genreId = _uiState.value.selectedGenre?.id ?: ""
@@ -457,6 +453,7 @@ class HomeViewModel @Inject constructor(
                 portalService.fetchVodList(rowId, nextPage, 14, genreId)
                     .getOrDefault(PortalPage(emptyList(), 0))
             }
+
             _uiState.update { state ->
                 state.copy(rows = state.rows.map {
                     if (it.id == rowId) {

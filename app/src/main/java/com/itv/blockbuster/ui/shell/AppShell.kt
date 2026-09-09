@@ -25,6 +25,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -34,7 +35,6 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -65,7 +65,6 @@ import com.itv.blockbuster.ui.theme.BbTextMuted
 import com.itv.blockbuster.ui.theme.BbTextPrimary
 import com.itv.blockbuster.ui.theme.BbTextSecondary
 
-// FIX: ADULT is part of the master lists; visibility is filtered at render time
 private val RailSections = listOf(
     AppSection.HOME,
     AppSection.SEARCH,
@@ -74,8 +73,7 @@ private val RailSections = listOf(
     AppSection.LIVE_TV,
     AppSection.TV_GUIDE,
     AppSection.MY_LIST,
-    AppSection.RECENT,
-    AppSection.ADULT
+    AppSection.RECENT
 )
 
 private val MenuSections = listOf(
@@ -85,8 +83,7 @@ private val MenuSections = listOf(
     AppSection.LIVE_TV,
     AppSection.TV_GUIDE,
     AppSection.MY_LIST,
-    AppSection.RECENT,
-    AppSection.ADULT
+    AppSection.RECENT
 )
 
 @Composable
@@ -94,17 +91,16 @@ fun AppShell(
     navController: NavHostController,
     content: @Composable () -> Unit
 ) {
-    // FIX: collect the gate so the rail/menu reactively show/hide the Adult item
-    val shellViewModel: AppShellViewModel = hiltViewModel()
-    val showAdult by shellViewModel.displayAdultContent.collectAsState()
+    // Inject AppShellViewModel to activate watchdog lifecycle management
+    hiltViewModel<AppShellViewModel>()
 
     val formFactor = rememberFormFactor()
     val currentRoute =
         navController.currentBackStackEntryAsState().value?.destination?.route
 
     when (formFactor) {
-        FormFactor.MOBILE_PORTRAIT -> PortraitShell(navController, currentRoute, content, showAdult)
-        else -> RailShell(navController, currentRoute, content, showAdult)
+        FormFactor.MOBILE_PORTRAIT -> PortraitShell(navController, currentRoute, content)
+        else -> RailShell(navController, currentRoute, content)
     }
 }
 
@@ -116,16 +112,13 @@ fun AppShell(
 private fun RailShell(
     navController: NavHostController,
     currentRoute: String?,
-    content: @Composable () -> Unit,
-    showAdult: Boolean
+    content: @Composable () -> Unit
 ) {
     var railExpanded by remember { mutableStateOf(false) }
     val railWidth by animateDpAsState(
         targetValue = if (railExpanded) 280.dp else 84.dp,
         label = "railWidth"
     )
-    // FIX: hide the Adult rail item unless the profile setting is enabled
-    val visibleSections = RailSections.filter { it != AppSection.ADULT || showAdult }
 
     Row(modifier = Modifier.fillMaxSize().background(BbBackground)) {
         Column(
@@ -156,7 +149,7 @@ private fun RailShell(
                 onClick = { navController.navigate(Routes.PROFILE_PICKER) }
             )
 
-            // Scrollable middle section so all rail items
+            // FIX: scrollable middle section so all rail items (now 10)
             // remain reachable on short TV viewports; profile stays pinned
             // at the top and Settings pinned at the bottom.
             Column(
@@ -166,7 +159,7 @@ private fun RailShell(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                visibleSections.forEach { section ->
+                RailSections.forEach { section ->
                     RailItem(
                         icon = section.icon,
                         label = section.label,
@@ -254,8 +247,7 @@ private fun RailItem(
 private fun PortraitShell(
     navController: NavHostController,
     currentRoute: String?,
-    content: @Composable () -> Unit,
-    showAdult: Boolean
+    content: @Composable () -> Unit
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     val currentLabel = when (currentRoute) {
@@ -313,8 +305,7 @@ private fun PortraitShell(
                         menuOpen = false
                         navController.navigateToSection(route)
                     },
-                    onClose = { menuOpen = false },
-                    showAdult = showAdult
+                    onClose = { menuOpen = false }
                 )
             }
         }
@@ -350,7 +341,7 @@ private fun PortraitShell(
             NavigationBarItem(
                 selected = currentRoute == Routes.PROFILE_HUB,
                 onClick = { navController.navigateToSection(Routes.PROFILE_HUB) },
-                icon = { Icon(Icons.Default.AccountCircle, "Profile") },
+                icon = { Icon(Icons.Default.AccountCircle, "Profile") }, // FIX: Distinct profile icon
                 label = { Text("Profile", fontSize = 11.sp) },
                 colors = NavigationBarItemDefaults.colors(
                     selectedIconColor = BbAccent,
@@ -368,11 +359,8 @@ private fun PortraitShell(
 private fun OverlayMenu(
     currentRoute: String?,
     onSelect: (String) -> Unit,
-    onClose: () -> Unit,
-    showAdult: Boolean
+    onClose: () -> Unit
 ) {
-    // FIX: hide the Adult menu entry unless the profile setting is enabled
-    val visibleSections = MenuSections.filter { it != AppSection.ADULT || showAdult }
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -381,7 +369,7 @@ private fun OverlayMenu(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        visibleSections.forEach { section ->
+        MenuSections.forEach { section ->
             val active = currentRoute == section.route
             Text(
                 text = section.label,

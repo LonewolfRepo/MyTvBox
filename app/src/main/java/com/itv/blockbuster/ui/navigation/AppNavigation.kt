@@ -20,7 +20,6 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import com.itv.blockbuster.ui.adult.AdultHubScreen
 import com.itv.blockbuster.ui.catchup.CatchupScreen
 import com.itv.blockbuster.ui.common.SectionPlaceholder
 import com.itv.blockbuster.ui.guide.TvGuideScreen
@@ -40,7 +39,6 @@ import com.itv.blockbuster.ui.theme.BbBackground
 import com.itv.blockbuster.ui.vod.VodBrowserScreen
 import com.itv.blockbuster.ui.vod.VodEpisodesScreen
 import com.itv.blockbuster.ui.vod.VodDetailScreen
-
 import kotlinx.coroutines.launch
 
 object Routes {
@@ -55,18 +53,11 @@ object Routes {
     val TV_GUIDE = AppSection.TV_GUIDE.route
     val MY_LIST = AppSection.MY_LIST.route
     val RECENT = AppSection.RECENT.route
-    val ADULT = AppSection.ADULT.route // NEW
     val SETTINGS = AppSection.SETTINGS.route
-
-    const val ADULT_LIVE_TV = "adult_live_tv" // NEW
-    const val ADULT_VOD_BROWSER = "adult_vod_browser" // NEW
-
     const val VOD_BROWSER = "vod_browser/{contentType}"
     const val VOD_DETAIL = "vod_detail/{itemId}/{contentType}"
     const val PLAYER = "player/{streamUrl}/{channelId}/{videoId}"
     const val CATCHUP = "catchup/{channelId}"
-
-
 }
 
 enum class FormFactor { TV, MOBILE_PORTRAIT, MOBILE_LANDSCAPE }
@@ -142,29 +133,33 @@ fun AppNavigation(
         composable(Routes.HOME) {
             AppShell(navController) {
                 HomeScreen(
-                    censoredOnly = false,
                     onOpenPortals = { navController.navigateToSection(Routes.SERVERS) },
-                    onOpenVodDetail = { itemId, type -> navController.navigate("vod_detail/$itemId/$type?isAdult=false") }
+                    onOpenVodDetail = { itemId, type -> navController.navigate("vod_detail/$itemId/$type") }
                 )
             }
         }
         // FIX: Movies explicitly passes "vod" contentType
         composable(Routes.MOVIES) {
             AppShell(navController) {
-                VodBrowserScreen(contentType = "vod", onOpenDetail = { itemId -> navController.navigate("vod_detail/$itemId/vod?isAdult=false") })
+                VodBrowserScreen(
+                    contentType = "vod",
+                    onOpenDetail = { itemId -> navController.navigate("vod_detail/$itemId/vod") }
+                )
             }
         }
         // FIX: TV Shows explicitly passes "series" contentType
         composable(Routes.TV_SHOWS) {
             AppShell(navController) {
-                VodBrowserScreen(contentType = "series", onOpenDetail = { itemId -> navController.navigate("vod_detail/$itemId/series?isAdult=false") })
+                VodBrowserScreen(
+                    contentType = "series",
+                    onOpenDetail = { itemId -> navController.navigate("vod_detail/$itemId/series") }
+                )
             }
         }
         composable(Routes.LIVE_TV) {
             AppShell(navController) {
                 LiveTvScreen(
-                    censoredOnly = false,
-                    onPlayChannel = { url, channelId -> navController.navigate("player/${encodeUrl(url)}/$channelId/none?isAdult=false") },
+                    onPlayChannel = { url, channelId -> navController.navigate("player/${encodeUrl(url)}/$channelId/none") },
                     onOpenCatchup = { channelId -> navController.navigate("catchup/$channelId") }
                 )
             }
@@ -172,7 +167,7 @@ fun AppNavigation(
         composable(Routes.TV_GUIDE) {
             AppShell(navController) {
                 TvGuideScreen(
-                    onPlayLive = { url, channelId -> navController.navigate("player/${encodeUrl(url)}/$channelId/none?isAdult=false") },
+                    onPlayLive = { url, channelId -> navController.navigate("player/${encodeUrl(url)}/$channelId/none") },
                     onOpenCatchup = { channelId -> navController.navigate("catchup/$channelId") }
                 )
             }
@@ -188,16 +183,24 @@ fun AppNavigation(
         composable(Routes.MY_LIST) {
             AppShell(navController) {
                 FavoritesHubScreen(
-                    onPlayLive = { url, channelId -> navController.navigate("player/${encodeUrl(url)}/$channelId/none") },
-                    onOpenVod = { itemId, type -> navController.navigate("vod_detail/$itemId/$type?isAdult=false") }
+                    onPlayLive = { url, channelId ->
+                        navController.navigate("player/${encodeUrl(url)}/$channelId/none")
+                    },
+                    onOpenVod = { itemId, type ->
+                        navController.navigate("vod_detail/$itemId/$type")
+                    }
                 )
             }
         }
         composable(Routes.RECENT) {
             AppShell(navController) {
                 RecentsHubScreen(
-                    onPlayLive = { url, channelId -> navController.navigate("player/${encodeUrl(url)}/$channelId/none") },
-                    onOpenVod = { itemId, type -> navController.navigate("vod_detail/$itemId/$type?isAdult=false") }
+                    onPlayLive = { url, channelId ->
+                        navController.navigate("player/${encodeUrl(url)}/$channelId/none")
+                    },
+                    onOpenVod = { itemId, type ->
+                        navController.navigate("vod_detail/$itemId/$type")
+                    }
                 )
             }
         }
@@ -206,8 +209,7 @@ fun AppNavigation(
             arguments = listOf(
                 navArgument("streamUrl") { type = NavType.StringType },
                 navArgument("channelId") { type = NavType.StringType; defaultValue = "none" },
-                navArgument("videoId") { type = NavType.StringType; defaultValue = "none" },
-                navArgument("isAdult") { type = NavType.BoolType; defaultValue = false }
+                navArgument("videoId") { type = NavType.StringType; defaultValue = "none" }
             )
         ) { backStackEntry ->
             val encodedUrl = backStackEntry.arguments?.getString("streamUrl") ?: ""
@@ -216,12 +218,10 @@ fun AppNavigation(
             } catch (e: Exception) { encodedUrl }
             val channelId = backStackEntry.arguments?.getString("channelId") ?: "none"
             val videoId = backStackEntry.arguments?.getString("videoId") ?: "none"
-            val isAdult = backStackEntry.arguments?.getBoolean("isAdult") ?: false
             PlayerScreen(
                 streamUrl = decodedUrl,
                 channelId = channelId,
                 videoId = videoId,
-                isAdult = isAdult,
                 onBack = { navController.popBackStack() }
             )
         }
@@ -230,32 +230,6 @@ fun AppNavigation(
         }
         composable(Routes.SEARCH) {
             AppShell(navController) { SectionPlaceholder(AppSection.SEARCH) }
-        }
-        composable(Routes.ADULT) {
-            AppShell(navController) {
-                AdultHubScreen(
-                    onNavigateToLive = { navController.navigate(Routes.ADULT_LIVE_TV) },
-                    onNavigateToVod = { navController.navigate(Routes.ADULT_VOD_BROWSER) }
-                )
-            }
-        }
-        composable(Routes.ADULT_LIVE_TV) {
-            AppShell(navController) {
-                LiveTvScreen(
-                    censoredOnly = true,
-                    onPlayChannel = { url, channelId -> navController.navigate("player/${encodeUrl(url)}/$channelId/none?isAdult=true") },
-                    onOpenCatchup = { channelId -> navController.navigate("catchup/$channelId") }
-                )
-            }
-        }
-        composable(Routes.ADULT_VOD_BROWSER) {
-            AppShell(navController) {
-                HomeScreen(
-                    censoredOnly = true,
-                    onOpenPortals = { navController.navigateToSection(Routes.SERVERS) },
-                    onOpenVodDetail = { itemId, type -> navController.navigate("vod_detail/$itemId/$type?isAdult=true") }
-                )
-            }
         }
         composable(Routes.SETTINGS) {
             AppShell(navController) {
@@ -291,24 +265,21 @@ fun AppNavigation(
             }
         }
 
-        // UPDATED: VodDetail Route accepts isAdult
         composable(
             route = Routes.VOD_DETAIL,
             arguments = listOf(
                 navArgument("itemId") { type = NavType.StringType },
-                navArgument("contentType") { type = NavType.StringType },
-                navArgument("isAdult") { type = NavType.BoolType; defaultValue = false } // NEW
+                navArgument("contentType") { type = NavType.StringType }
             )
         ) { backStackEntry ->
             val contentType = backStackEntry.arguments?.getString("contentType") ?: "vod"
             val itemId = backStackEntry.arguments?.getString("itemId") ?: ""
-            val isAdult = backStackEntry.arguments?.getBoolean("isAdult") ?: false
-
             AppShell(navController) {
                 VodDetailScreen(
-                    isAdult = isAdult,
-                    onPlay = { url -> navController.navigate("player/${encodeUrl(url)}/none/none?isAdult=$isAdult") },
-                    onOpenEpisodes = { navController.navigate("vod_episodes/$itemId/$contentType?isAdult=$isAdult") }
+                    onPlay = { url -> navController.navigate("player/${encodeUrl(url)}/none/none") },
+                    onOpenEpisodes = {
+                        navController.navigate("vod_episodes/$itemId/$contentType")
+                    }
                 )
             }
         }
@@ -316,14 +287,12 @@ fun AppNavigation(
             route = "vod_episodes/{itemId}/{contentType}",
             arguments = listOf(
                 navArgument("itemId") { type = NavType.StringType },
-                navArgument("contentType") { type = NavType.StringType },
-                navArgument("isAdult") { type = NavType.BoolType; defaultValue = false }
+                navArgument("contentType") { type = NavType.StringType }
             )
-        ) { backStackEntry ->
-            val isAdult = backStackEntry.arguments?.getBoolean("isAdult") ?: false
+        ) {
             AppShell(navController) {
                 VodEpisodesScreen(
-                    onPlay = { url -> navController.navigate("player/${encodeUrl(url)}/none/none?isAdult=$isAdult") },
+                    onPlay = { url -> navController.navigate("player/${encodeUrl(url)}/none/none") },
                     onBack = { navController.popBackStack() }
                 )
             }

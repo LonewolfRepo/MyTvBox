@@ -1,6 +1,5 @@
 package com.itv.blockbuster.ui.guide
 
-import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.itv.blockbuster.data.local.UserPreferencesRepository
@@ -52,12 +51,8 @@ class TvGuideViewModel @Inject constructor(
     private val serverRepository: ServerRepository,         // NEW
     private val prefs: UserPreferencesRepository,
     private val sessionManager: StalkerSessionManager,
-    val playbackManager: PlaybackManager,
-    savedStateHandle: SavedStateHandle
+    val playbackManager: PlaybackManager
 ) : ViewModel() {
-
-    // FIX: Read navigation argument to invert filters for Adult mode
-    private val censoredOnly: Boolean = savedStateHandle.get<Boolean>("censoredOnly") ?: false
 
     private val _uiState = MutableStateFlow(GuideUiState())
     val uiState: StateFlow<GuideUiState> = _uiState.asStateFlow()
@@ -115,20 +110,13 @@ class TvGuideViewModel @Inject constructor(
 
         // Identify and filter out censored categories (censored == 1)
         val censoredCategoryIds = allCats.filter { it.isCensored }.map { it.id }.toSet()
-
-        // FIX: Invert category filter for Adult mode
-        val cats = allCats.filter { it.isCensored == censoredOnly }
+        val cats = allCats.filter { !it.isCensored }
 
         // Filter out channels belonging to censored categories
-        val allRaw = liveTvRepository.getAllChannels().getOrDefault(PortalPage(emptyList(), 0)).items
+        val allChannels = liveTvRepository.getAllChannels().getOrDefault(PortalPage(emptyList(), 0)).items
+            .filter { it.genreId !in censoredCategoryIds }
 
-        // FIX: Filter channels based on Adult mode
-        val allChannels = if (censoredOnly) {
-            allRaw.filter { it.genreId in censoredCategoryIds }
-        } else {
-            allRaw.filter { it.genreId !in censoredCategoryIds }
-        }
-
+        // Properly handle "All" category so channels aren't filtered out
         val default = cats.firstOrNull { it.id == "*" || it.id == "0" || it.id == "all" } ?: cats.firstOrNull()
         val isAll = default == null || default.id == "*" || default.id == "0" || default.id == "all"
         val filteredChannels = if (isAll) allChannels else allChannels.filter { it.genreId == default?.id }

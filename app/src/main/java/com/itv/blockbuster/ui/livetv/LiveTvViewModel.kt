@@ -1,9 +1,7 @@
 package com.itv.blockbuster.ui.livetv
 
-import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-
 import com.itv.blockbuster.data.local.SettingsRepository
 import com.itv.blockbuster.data.local.UserPreferencesRepository
 import com.itv.blockbuster.data.player.PlaybackManager
@@ -46,12 +44,8 @@ class LiveTvViewModel @Inject constructor(
     private val settings: SettingsRepository,
     private val prefs: UserPreferencesRepository,
     private val sessionManager: StalkerSessionManager,
-    val playbackManager: PlaybackManager,
-    savedStateHandle: SavedStateHandle // NEW
+    val playbackManager: PlaybackManager
 ) : ViewModel() {
-
-    // NEW: Read navigation argument to invert filters for Adult mode
-    private val censoredOnly: Boolean = savedStateHandle.get<Boolean>("censoredOnly") ?: false
 
     private val _uiState = MutableStateFlow(LiveTvUiState())
     val uiState: StateFlow<LiveTvUiState> = _uiState.asStateFlow()
@@ -110,18 +104,12 @@ class LiveTvViewModel @Inject constructor(
 
         // FIX: Identify and filter out censored categories (censored == 1)
         val censoredCategoryIds = allCats.filter { it.isCensored }.map { it.id }.toSet()
+        val cats = allCats.filter { !it.isCensored }
 
-        // FIX: Invert category filter for Adult mode
-        val cats = allCats.filter { it.isCensored == censoredOnly }
-
-        val allRaw = liveTvRepository.getAllChannels().getOrDefault(PortalPage(emptyList(), 0)).items
-
-        // FIX: Filter channels based on Adult mode
-        val all = if (censoredOnly) {
-            allRaw.filter { it.genreId in censoredCategoryIds }
-        } else {
-            allRaw.filter { it.genreId !in censoredCategoryIds }
-        }
+        // FIX: Filter out channels belonging to censored categories so they
+        // don't leak into the "All Categories" view.
+        val all = liveTvRepository.getAllChannels().getOrDefault(PortalPage(emptyList(), 0)).items
+            .filter { it.genreId !in censoredCategoryIds }
 
         val p = prefs.activeProfileIdFlow.first()
         val s = sessionManager.activePortal.value?.serverId ?: 0
@@ -159,7 +147,6 @@ class LiveTvViewModel @Inject constructor(
     }
 
     fun toggleFavorite(channel: PortalChannel) {
-        if (censoredOnly) return // Block favorites in adult mode
         viewModelScope.launch {
             val p = prefs.activeProfileIdFlow.first()
             val s = sessionManager.activePortal.value?.serverId ?: 0

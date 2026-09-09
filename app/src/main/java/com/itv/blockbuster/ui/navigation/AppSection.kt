@@ -6,7 +6,6 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Movie
-import androidx.compose.material.icons.filled.NoAdultContent
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
@@ -26,6 +25,5 @@ enum class AppSection(
     TV_GUIDE("tv_guide", "TV Guide", Icons.Default.CalendarMonth),
     MY_LIST("my_list", "Favorites", Icons.Default.Star),
     RECENT("recent", "Recent", Icons.Default.History),
-    ADULT("adult", "Adult", Icons.Default.NoAdultContent), // FIX: rail entry for the gated Adult hub
     SETTINGS("settings", "Settings", Icons.Default.Settings)
 }
