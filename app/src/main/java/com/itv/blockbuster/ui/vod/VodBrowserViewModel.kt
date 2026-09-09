@@ -14,9 +14,11 @@ import com.itv.blockbuster.ui.components.HomeRow
 import com.itv.blockbuster.util.CategorySortHelper
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -45,6 +47,12 @@ class VodBrowserViewModel @Inject constructor(
     private val sessionManager: StalkerSessionManager
 ) : ViewModel() {
 
+    companion object {
+        // TV typing is slow (remote / sparse keyboard): wait 800ms after the last
+        // keystroke before hitting the portal. Clearing the field bypasses this.
+        const val SEARCH_DEBOUNCE_MS = 800L
+    }
+
     private var _contentType: String = ""
     val contentType: String get() = _contentType
 
@@ -66,6 +74,16 @@ class VodBrowserViewModel @Inject constructor(
     val hasMoreCategories: StateFlow<Boolean> = _hasMoreCategories.asStateFlow()
 
     private var isInitialized = false
+
+    // NEW: pending debounced search; cancelled on every new keystroke
+    private var searchJob: Job? = null
+
+    /**
+     * NEW: Censored (adult) items are stripped HERE, at the Movies / TV Shows page
+     * level, instead of in VodRepository. The repository stays raw so a dedicated
+     * Censored page can reuse the same data later.
+     */
+    private fun List<PortalVodItem>.visible(): List<PortalVodItem> = filter { !it.isCensored }
 
     fun initialize(type: String) {
         if (isInitialized && _contentType == type) return
@@ -91,7 +109,8 @@ class VodBrowserViewModel @Inject constructor(
             }.flatMapLatest { (p, s) ->
                 vodRepository.getFavorites(p, s, if (_contentType == "series") "SERIES" else "VOD")
             }.collect { favs ->
-                _favoriteIds.value = favs.map { it.itemId }.toSet() }
+                _favoriteIds.value = favs.map { it.itemId }.toSet()
+            }
         }
     }
 
@@ -118,7 +137,9 @@ class VodBrowserViewModel @Inject constructor(
     private suspend fun loadInitialData(profileId: Int, serverId: Int) {
         _state.update { it.copy(isLoading = true) }
         try {
+            // Censored categories stay hidden on Movies / TV Shows (dedicated page later)
             val masterCats = vodRepository.getCategories().getOrDefault(emptyList())
+                .filter { !it.isCensored }
             val masterGenres = vodRepository.getGenres().getOrDefault(emptyList())
 
             val orderKey = if (_contentType == "series") "order_series" else "order_vod"
@@ -142,7 +163,8 @@ class VodBrowserViewModel @Inject constructor(
                     categories = ordered,
                     selectedCategory = defaultCat,
                     genres = genresWithAll,
-                    selectedGenre = allGenre
+                    selectedGenre = allGenre,
+                    searchQuery = ""
                 )
             }
 
@@ -165,7 +187,7 @@ class VodBrowserViewModel @Inject constructor(
                 async(Dispatchers.IO) {
                     val page = vodRepository.getList(_contentType, cat.id, 1, 14, genreId)
                         .getOrDefault(PortalPage(emptyList(), 0))
-                    HomeRow(cat.id, cat.title, page.items, currentPage = 1, hasMore = page.items.size >= 14)
+                    HomeRow(cat.id, cat.title, page.items.visible(), currentPage = 1, hasMore = page.items.size >= 14)
                 }
             }.awaitAll().filter { it.items.isNotEmpty() }
         }
@@ -173,7 +195,9 @@ class VodBrowserViewModel @Inject constructor(
     }
 
     fun selectCategory(category: PortalCategory) {
+        // Category change clears the search and reloads normally
         _state.update { it.copy(selectedCategory = category, searchQuery = "") }
+        searchJob?.cancel()
         if (category.id != "*" && category.id != "0") {
             _hasMoreCategories.value = false
         }
@@ -183,15 +207,26 @@ class VodBrowserViewModel @Inject constructor(
     fun selectGenre(genre: PortalCategory) {
         _state.update { it.copy(selectedGenre = genre) }
         viewModelScope.launch {
+            // Genre change while a search is active re-runs the search with the new genre
             val cat = _state.value.selectedCategory ?: return@launch
             loadContent(cat, _state.value.searchQuery)
         }
     }
 
+    /**
+     * NEW: debounced search entry point used by the top-bar search field.
+     * Blank query restores the normal category/genre rows immediately (no debounce).
+     */
     fun updateSearch(query: String) {
         _state.update { it.copy(searchQuery = query) }
-        viewModelScope.launch {
+        searchJob?.cancel()
+        searchJob = viewModelScope.launch {
             val cat = _state.value.selectedCategory ?: return@launch
+            if (query.isBlank()) {
+                loadContent(cat, "")
+                return@launch
+            }
+            delay(SEARCH_DEBOUNCE_MS)
             loadContent(cat, query)
         }
     }
@@ -202,11 +237,29 @@ class VodBrowserViewModel @Inject constructor(
         try {
             val genreId = _state.value.selectedGenre?.id ?: ""
             if (search.isNotBlank()) {
+                // get_ordered_list&type=vod with &search= + &category= + &genre=
                 val result = vodRepository.search(_contentType, search, category.id, 1, genreId)
                 val page = result.getOrDefault(PortalPage(emptyList(), 0))
                 _hasMoreCategories.value = false
+                // FIX: search row paginates page-by-page until a page returns 0 rows;
+                // censored items are stripped from the visible results.
                 _state.update {
-                    it.copy(isLoading = false, rows = listOf(HomeRow("search", "Search Results", page.items, hasMore = false)))
+                    it.copy(
+                        isLoading = false,
+                        rows = if (page.items.isNotEmpty()) {
+                            listOf(
+                                HomeRow(
+                                    id = "search",
+                                    title = "Search Results",
+                                    items = page.items.visible(),
+                                    currentPage = 1,
+                                    hasMore = true
+                                )
+                            )
+                        } else {
+                            emptyList()
+                        }
+                    )
                 }
                 return
             }
@@ -224,7 +277,7 @@ class VodBrowserViewModel @Inject constructor(
                     async(Dispatchers.IO) {
                         val page = vodRepository.getList(_contentType, cat.id, 1, 14, genreId)
                             .getOrDefault(PortalPage(emptyList(), 0))
-                        HomeRow(cat.id, cat.title, page.items, currentPage = 1, hasMore = page.items.size >= 14)
+                        HomeRow(cat.id, cat.title, page.items.visible(), currentPage = 1, hasMore = page.items.size >= 14)
                     }
                 }.awaitAll().filter { it.items.isNotEmpty() }
             }
@@ -242,9 +295,10 @@ class VodBrowserViewModel @Inject constructor(
      */
     fun loadMoreCategories() {
         if (_isLoadingMoreCategories.value || !_hasMoreCategories.value) return
-
         val selectedCat = _state.value.selectedCategory
         if (selectedCat == null || (selectedCat.id != "*" && selectedCat.id != "0")) return
+        // NEW: never vertically paginate while a search is active
+        if (_state.value.searchQuery.isNotBlank()) return
 
         viewModelScope.launch {
             _isLoadingMoreCategories.value = true
@@ -262,7 +316,7 @@ class VodBrowserViewModel @Inject constructor(
                         async(Dispatchers.IO) {
                             val page = vodRepository.getList(_contentType, cat.id, 1, 14, genreId)
                                 .getOrDefault(PortalPage(emptyList(), 0))
-                            HomeRow(cat.id, cat.title, page.items, currentPage = 1, hasMore = page.items.size >= 14)
+                            HomeRow(cat.id, cat.title, page.items.visible(), currentPage = 1, hasMore = page.items.size >= 14)
                         }
                     }.awaitAll().filter { it.items.isNotEmpty() }
                 }
@@ -288,16 +342,29 @@ class VodBrowserViewModel @Inject constructor(
 
             val nextPage = currentRow.currentPage + 1
             val genreId = _state.value.selectedGenre?.id ?: ""
-            val page = vodRepository.getList(_contentType, rowId, nextPage, 14, genreId)
-                .getOrDefault(PortalPage(emptyList(), 0))
+
+            // FIX: the "search" row must re-run the SEARCH request for the next page
+            // (not getList with category id "search").
+            val page = if (rowId == "search") {
+                val query = _state.value.searchQuery
+                val categoryId = _state.value.selectedCategory?.id ?: "*"
+                vodRepository.search(_contentType, query, categoryId, nextPage, genreId)
+                    .getOrDefault(PortalPage(emptyList(), 0))
+            } else {
+                vodRepository.getList(_contentType, rowId, nextPage, 14, genreId)
+                    .getOrDefault(PortalPage(emptyList(), 0))
+            }
 
             _state.update { state ->
                 state.copy(rows = state.rows.map {
                     if (it.id == rowId) {
                         it.copy(
-                            items = it.items + page.items,
+                            // Censored items stripped from appended pages as well
+                            items = it.items + page.items.visible(),
                             currentPage = nextPage,
-                            hasMore = page.items.size >= 14,
+                            // FIX: search rows keep paginating until a page returns 0 rows;
+                            // category rows stop on a partial page as before.
+                            hasMore = if (rowId == "search") page.items.isNotEmpty() else page.items.size >= 14,
                             isLoadingPage = false
                         )
                     } else it

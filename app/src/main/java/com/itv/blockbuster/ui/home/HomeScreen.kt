@@ -22,12 +22,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -53,6 +56,8 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.itv.blockbuster.domain.model.PortalCategory
 import com.itv.blockbuster.ui.components.CarouselRow
 import com.itv.blockbuster.ui.components.HeroBanner
+import com.itv.blockbuster.ui.navigation.FormFactor
+import com.itv.blockbuster.ui.navigation.rememberFormFactor
 import com.itv.blockbuster.ui.theme.BbAccent
 import com.itv.blockbuster.ui.theme.BbBackground
 import com.itv.blockbuster.ui.theme.BbCard
@@ -72,6 +77,9 @@ fun HomeScreen(
     val favoriteIds by viewModel.favoriteIds.collectAsState()
     val progressMap by viewModel.progressMap.collectAsState()
     val hasMoreCategories by viewModel.hasMoreCategories.collectAsState()
+
+    val formFactor = rememberFormFactor()
+    val isPortrait = formFactor == FormFactor.MOBILE_PORTRAIT
 
     // Reload Home when returning from Settings if Home category
     // visibility/order was changed while away.
@@ -97,36 +105,103 @@ fun HomeScreen(
                 LoadingOverlay(isConnecting = state.isConnecting)
             else -> {
                 Column(modifier = Modifier.fillMaxSize()) {
-                    // Top Bar with Title, Genre Filter, and Category Filter
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 24.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Home",
-                            color = BbAccent,
-                            fontSize = 22.sp,
-                            fontWeight = FontWeight.Bold
+                    if (isPortrait) {
+                        // Portrait Layout: Row 1 (Title + Filters) | Row 2 (Search)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Home",
+                                color = BbAccent,
+                                fontSize = 22.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(Modifier.weight(1f))
+                            HomeGenreDropdown(
+                                genres = state.genres,
+                                selectedGenre = state.selectedGenre,
+                                onGenreSelected = { viewModel.selectGenre(it) }
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            HomeCategoryDropdown(
+                                categories = state.categories,
+                                selectedCategory = state.selectedCategory,
+                                onCategorySelected = { viewModel.selectCategory(it) }
+                            )
+                        }
+                        OutlinedTextField(
+                            value = state.searchQuery,
+                            onValueChange = { viewModel.updateSearch(it) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(start = 16.dp, end = 16.dp, bottom = 12.dp), // FIX: Corrected padding parameters
+                            placeholder = { Text("Search...", color = BbTextMuted) },
+                            leadingIcon = { Icon(Icons.Default.Search, null, tint = BbTextMuted) },
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = BbAccent,
+                                unfocusedBorderColor = BbTextMuted.copy(alpha = 0.3f),
+                                cursorColor = BbAccent,
+                                focusedTextColor = BbTextPrimary,
+                                unfocusedTextColor = BbTextPrimary
+                            ),
+                            shape = RoundedCornerShape(8.dp)
                         )
-                        Spacer(Modifier.weight(1f))
-                        HomeGenreDropdown(
-                            genres = state.genres,
-                            selectedGenre = state.selectedGenre,
-                            onGenreSelected = { viewModel.selectGenre(it) }
-                        )
-                        Spacer(Modifier.width(12.dp))
-                        HomeCategoryDropdown(
-                            categories = state.categories,
-                            selectedCategory = state.selectedCategory,
-                            onCategorySelected = { viewModel.selectCategory(it) }
-                        )
+                    } else {
+                        // TV / Landscape Layout: Single Row
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 24.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Home",
+                                color = BbAccent,
+                                fontSize = 22.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(Modifier.weight(1f))
+                            // NEW: Search field (left of Genres filter); debounced in the VM
+                            OutlinedTextField(
+                                value = state.searchQuery,
+                                onValueChange = { viewModel.updateSearch(it) },
+                                modifier = Modifier.width(260.dp),
+                                placeholder = { Text("Search...", color = BbTextMuted) },
+                                leadingIcon = { Icon(Icons.Default.Search, null, tint = BbTextMuted) },
+                                singleLine = true,
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = BbAccent,
+                                    unfocusedBorderColor = BbTextMuted.copy(alpha = 0.3f),
+                                    cursorColor = BbAccent,
+                                    focusedTextColor = BbTextPrimary,
+                                    unfocusedTextColor = BbTextPrimary
+                                ),
+                                shape = RoundedCornerShape(8.dp)
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            HomeGenreDropdown(
+                                genres = state.genres,
+                                selectedGenre = state.selectedGenre,
+                                onGenreSelected = { viewModel.selectGenre(it) }
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            HomeCategoryDropdown(
+                                categories = state.categories,
+                                selectedCategory = state.selectedCategory,
+                                onCategorySelected = { viewModel.selectCategory(it) }
+                            )
+                        }
                     }
+
                     LazyColumn(modifier = Modifier.fillMaxSize()) {
-                        // Only show HeroBanner if "All Categories" is selected
+                        // Only show HeroBanner if "All Categories" is selected and no search is active
                         val isAllCategories = state.selectedCategory?.id == "*" || state.selectedCategory?.id == "0"
-                        if (isAllCategories) {
+                        val isSearching = state.searchQuery.isNotBlank()
+                        if (isAllCategories && !isSearching) {
                             item(key = "hero") { HeroBanner(hero = state.hero) }
                         }
                         items(state.rows, key = { it.id }) { row ->
@@ -143,8 +218,8 @@ fun HomeScreen(
                                 onLoadMore = { viewModel.loadMoreRowItems(row.id) }
                             )
                         }
-                        // Vertical Pagination Trigger (only for All Categories)
-                        if (hasMoreCategories && isAllCategories) {
+                        // Vertical Pagination Trigger (only for All Categories, no active search)
+                        if (hasMoreCategories && isAllCategories && !isSearching) {
                             item {
                                 // FIX: re-fire whenever the row set or filters change while
                                 // the spinner is visible, so pagination never stalls after
@@ -182,7 +257,7 @@ private fun HomeGenreDropdown(
 ) {
     var expanded by remember { mutableStateOf(false) }
     var isFocused by remember { mutableStateOf(false) }
-    Box(modifier = Modifier.width(220.dp)) {
+    Box(modifier = Modifier.width(180.dp)) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -245,7 +320,7 @@ private fun HomeCategoryDropdown(
 ) {
     var expanded by remember { mutableStateOf(false) }
     var isFocused by remember { mutableStateOf(false) }
-    Box(modifier = Modifier.width(220.dp)) {
+    Box(modifier = Modifier.width(180.dp)) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()

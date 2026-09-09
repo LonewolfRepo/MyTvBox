@@ -18,9 +18,11 @@ import com.itv.blockbuster.ui.components.HomeRow
 import com.itv.blockbuster.util.CategorySortHelper
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -42,7 +44,9 @@ data class HomeUiState(
     val categories: List<PortalCategory> = emptyList(),
     val selectedCategory: PortalCategory? = null,
     val genres: List<PortalCategory> = emptyList(),
-    val selectedGenre: PortalCategory? = null
+    val selectedGenre: PortalCategory? = null,
+    // NEW: active search query (combined with genre + category filters)
+    val searchQuery: String = ""
 )
 
 @HiltViewModel
@@ -55,6 +59,13 @@ class HomeViewModel @Inject constructor(
     private val prefs: UserPreferencesRepository,
     private val settings: SettingsRepository
 ) : ViewModel() {
+
+    companion object {
+        // TV typing is slow (remote / sparse keyboard): wait 800ms after the last
+        // keystroke before hitting the portal. Clearing the field bypasses this.
+        const val SEARCH_DEBOUNCE_MS = 800L
+    }
+
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
@@ -74,6 +85,16 @@ class HomeViewModel @Inject constructor(
     // Signature of the "order_home" setting used by the last successful load.
     // Used to detect Settings changes when the user navigates back to Home.
     private var lastAppliedHomeOrder: String? = null
+
+    // NEW: pending debounced search; cancelled on every new keystroke
+    private var searchJob: Job? = null
+
+    /**
+     * NEW: Censored (adult) items are stripped at the page level (Home, Movies,
+     * TV Shows) instead of in VodRepository, so a dedicated Censored page can
+     * reuse the raw repository data later.
+     */
+    private fun List<PortalVodItem>.visible(): List<PortalVodItem> = filter { !it.isCensored }
 
     init {
         viewModelScope.launch {
@@ -167,6 +188,7 @@ class HomeViewModel @Inject constructor(
 
     private suspend fun loadHome() {
         _uiState.update { it.copy(isLoading = true) }
+        searchJob?.cancel()
         val p = prefs.activeProfileIdFlow.firstOrNull() ?: -1
         val s = sessionManager.activePortal.value?.serverId ?: 0
 
@@ -202,7 +224,8 @@ class HomeViewModel @Inject constructor(
                 categories = categoriesWithAll,
                 selectedCategory = allCat,
                 genres = genresWithAll,
-                selectedGenre = allGenre
+                selectedGenre = allGenre,
+                searchQuery = ""
             )
         }
 
@@ -210,7 +233,9 @@ class HomeViewModel @Inject constructor(
     }
 
     fun selectCategory(category: PortalCategory) {
-        _uiState.update { it.copy(selectedCategory = category) }
+        // Category change clears the search and reloads normally
+        _uiState.update { it.copy(selectedCategory = category, searchQuery = "") }
+        searchJob?.cancel()
         viewModelScope.launch {
             if (category.id == "*" || category.id == "0") {
                 loadDefaultHomeRows()
@@ -223,6 +248,12 @@ class HomeViewModel @Inject constructor(
     fun selectGenre(genre: PortalCategory) {
         _uiState.update { it.copy(selectedGenre = genre) }
         viewModelScope.launch {
+            // Genre change while a search is active re-runs the search with the new genre
+            val q = _uiState.value.searchQuery
+            if (q.isNotBlank()) {
+                loadSearchResults(q)
+                return@launch
+            }
             val selectedCat = _uiState.value.selectedCategory
             if (selectedCat?.id == "*" || selectedCat?.id == "0") {
                 loadDefaultHomeRows()
@@ -232,12 +263,73 @@ class HomeViewModel @Inject constructor(
         }
     }
 
+    /**
+     * NEW: debounced search entry point used by the top-bar search field.
+     * Blank query restores the normal home rows immediately (no debounce).
+     */
+    fun updateSearch(query: String) {
+        _uiState.update { it.copy(searchQuery = query) }
+        searchJob?.cancel()
+        searchJob = viewModelScope.launch {
+            if (query.isBlank()) {
+                reloadCurrentView()
+                return@launch
+            }
+            delay(SEARCH_DEBOUNCE_MS)
+            loadSearchResults(query)
+        }
+    }
+
+    private suspend fun reloadCurrentView() {
+        val selectedCat = _uiState.value.selectedCategory
+        if (selectedCat == null || selectedCat.id == "*" || selectedCat.id == "0") {
+            loadDefaultHomeRows()
+        } else {
+            loadCategoryContent(selectedCat)
+        }
+    }
+
+    /**
+     * NEW: get_ordered_list&type=vod with &search={q} combined with the active
+     * category and genre filters. Results replace the carousel rows with a
+     * single "Search Results" row (mixed movies + series, like Home rows).
+     * FIX: pagination now continues page-by-page until a page returns 0 rows.
+     * FIX: Censored items are stripped from the visible results.
+     */
+    private suspend fun loadSearchResults(query: String) {
+        _uiState.update { it.copy(isLoading = true, hero = null) }
+        val genreId = _uiState.value.selectedGenre?.id ?: ""
+        val categoryId = _uiState.value.selectedCategory?.id ?: "*"
+        val page = portalService.fetchVodSearch(query, categoryId, 1, genreId)
+            .getOrDefault(PortalPage(emptyList(), 0))
+
+        val visibleItems = page.items.visible()
+        val rows = if (page.items.isNotEmpty()) {
+            listOf(
+                HomeRow(
+                    id = "search",
+                    title = "Search Results",
+                    items = visibleItems,
+                    currentPage = 1,
+                    // Keep paginating until a subsequent page returns 0 rows
+                    hasMore = true
+                )
+            )
+        } else {
+            emptyList()
+        }
+        _uiState.update { it.copy(isLoading = false, rows = rows) }
+    }
+
     private suspend fun loadDefaultHomeRows() {
         _uiState.update { it.copy(isLoading = true) }
         val genreId = _uiState.value.selectedGenre?.id ?: ""
 
         val recentPage = portalService.fetchVodList(categoryId = "*", page = 1, pageSize = 15, genreId = genreId)
             .getOrDefault(PortalPage(emptyList(), 0))
+
+        // Censored items stripped from "Recently Added" (category "*" spans everything)
+        val visibleRecent = recentPage.items.visible()
 
         val categoryRows = coroutineScope {
             _visibleCategories.value.map { category ->
@@ -247,7 +339,7 @@ class HomeViewModel @Inject constructor(
                     HomeRow(
                         id = category.id,
                         title = category.title,
-                        items = page.items,
+                        items = page.items.visible(),
                         currentPage = 1,
                         hasMore = page.items.size >= 14
                     )
@@ -260,12 +352,12 @@ class HomeViewModel @Inject constructor(
             // FIX: "Recently Added" is no longer capped. It now carries real pagination
             // state so the row keeps loading horizontally until the portal's full
             // recent list is exhausted (limit removed).
-            if (recentPage.items.isNotEmpty()) {
+            if (visibleRecent.isNotEmpty()) {
                 add(
                     HomeRow(
                         id = "*",
                         title = "Recently Added",
-                        items = recentPage.items,
+                        items = visibleRecent,
                         currentPage = 1,
                         hasMore = recentPage.items.isNotEmpty()
                     )
@@ -273,25 +365,22 @@ class HomeViewModel @Inject constructor(
             }
             addAll(categoryRows)
         }
-        _uiState.update { it.copy(isLoading = false, hero = recentPage.items.firstOrNull(), rows = allRows) }
+        _uiState.update { it.copy(isLoading = false, hero = visibleRecent.firstOrNull(), rows = allRows) }
     }
 
     private suspend fun loadCategoryContent(category: PortalCategory) {
         _uiState.update { it.copy(isLoading = true, hero = null) }
         _hasMoreCategories.value = false
         val genreId = _uiState.value.selectedGenre?.id ?: ""
-
         val page = portalService.fetchVodList(category.id, 1, 14, genreId)
             .getOrDefault(PortalPage(emptyList(), 0))
-
         val row = HomeRow(
             id = category.id,
             title = category.title,
-            items = page.items,
+            items = page.items.visible(),
             currentPage = 1,
             hasMore = page.items.size >= 14
         )
-
         _uiState.update { it.copy(isLoading = false, rows = listOf(row)) }
     }
 
@@ -305,11 +394,11 @@ class HomeViewModel @Inject constructor(
         if (_isLoadingMoreCategories.value || !_hasMoreCategories.value) return
         val selectedCat = _uiState.value.selectedCategory
         if (selectedCat == null || (selectedCat.id != "*" && selectedCat.id != "0")) return
-
+        // NEW: never vertically paginate while a search is active
+        if (_uiState.value.searchQuery.isNotBlank()) return
         viewModelScope.launch {
             _isLoadingMoreCategories.value = true
             val genreId = _uiState.value.selectedGenre?.id ?: ""
-
             while (_hasMoreCategories.value) {
                 val currentSize = _visibleCategories.value.size
                 val nextBatch = _allCategories.value.drop(currentSize).take(5)
@@ -325,7 +414,7 @@ class HomeViewModel @Inject constructor(
                             HomeRow(
                                 id = category.id,
                                 title = category.title,
-                                items = page.items,
+                                items = page.items.visible(),
                                 currentPage = 1,
                                 hasMore = page.items.size >= 14
                             )
@@ -352,15 +441,29 @@ class HomeViewModel @Inject constructor(
             }
             val nextPage = currentRow.currentPage + 1
             val genreId = _uiState.value.selectedGenre?.id ?: ""
-            val page = portalService.fetchVodList(rowId, nextPage, 14, genreId)
-                .getOrDefault(PortalPage(emptyList(), 0))
+
+            // FIX: the "search" row must re-run the SEARCH request for the next page
+            // (not fetchVodList with category id "search").
+            val page = if (rowId == "search") {
+                val query = _uiState.value.searchQuery
+                val categoryId = _uiState.value.selectedCategory?.id ?: "*"
+                portalService.fetchVodSearch(query, categoryId, nextPage, genreId)
+                    .getOrDefault(PortalPage(emptyList(), 0))
+            } else {
+                portalService.fetchVodList(rowId, nextPage, 14, genreId)
+                    .getOrDefault(PortalPage(emptyList(), 0))
+            }
+
             _uiState.update { state ->
                 state.copy(rows = state.rows.map {
                     if (it.id == rowId) {
                         it.copy(
-                            items = it.items + page.items,
+                            // Censored items stripped from appended pages as well
+                            items = it.items + page.items.visible(),
                             currentPage = nextPage,
-                            hasMore = page.items.size >= 14,
+                            // FIX: search rows keep paginating until a page returns 0 rows;
+                            // category rows stop on a partial page as before.
+                            hasMore = if (rowId == "search") page.items.isNotEmpty() else page.items.size >= 14,
                             isLoadingPage = false
                         )
                     } else it

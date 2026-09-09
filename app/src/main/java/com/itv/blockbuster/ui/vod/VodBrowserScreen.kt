@@ -19,10 +19,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -42,6 +45,8 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.itv.blockbuster.domain.model.PortalCategory
 import com.itv.blockbuster.ui.components.CarouselRow
+import com.itv.blockbuster.ui.navigation.FormFactor
+import com.itv.blockbuster.ui.navigation.rememberFormFactor
 import com.itv.blockbuster.ui.theme.BbAccent
 import com.itv.blockbuster.ui.theme.BbBackground
 import com.itv.blockbuster.ui.theme.BbCard
@@ -61,6 +66,9 @@ fun VodBrowserScreen(
     val progressMap by viewModel.progressMap.collectAsState()
     val hasMoreCategories by viewModel.hasMoreCategories.collectAsState()
 
+    val formFactor = rememberFormFactor()
+    val isPortrait = formFactor == FormFactor.MOBILE_PORTRAIT
+
     LaunchedEffect(contentType) {
         viewModel.initialize(contentType)
     }
@@ -70,31 +78,98 @@ fun VodBrowserScreen(
             CircularProgressIndicator(color = BbAccent, modifier = Modifier.align(Alignment.Center))
         } else {
             Column(modifier = Modifier.fillMaxSize()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 24.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = if (contentType == "series") "TV Shows" else "Movies",
-                        color = BbAccent,
-                        fontSize = 22.sp,
-                        fontWeight = FontWeight.Bold
+                if (isPortrait) {
+                    // Portrait Layout: Row 1 (Title + Filters) | Row 2 (Search)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (contentType == "series") "TV Shows" else "Movies",
+                            color = BbAccent,
+                            fontSize = 22.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(Modifier.weight(1f))
+                        BrowserGenreDropdown(
+                            genres = state.genres,
+                            selectedGenre = state.selectedGenre,
+                            onGenreSelected = { viewModel.selectGenre(it) }
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        BrowserCategoryDropdown(
+                            categories = state.categories,
+                            selectedCategory = state.selectedCategory,
+                            onCategorySelected = { viewModel.selectCategory(it) }
+                        )
+                    }
+                    OutlinedTextField(
+                        value = state.searchQuery,
+                        onValueChange = { viewModel.updateSearch(it) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 16.dp, end = 16.dp, bottom = 12.dp), // FIX: Corrected padding parameters
+                        placeholder = { Text("Search...", color = BbTextSecondary) },
+                        leadingIcon = { Icon(Icons.Default.Search, null, tint = BbTextSecondary) },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = BbAccent,
+                            unfocusedBorderColor = BbCard,
+                            cursorColor = BbAccent,
+                            focusedTextColor = BbTextPrimary,
+                            unfocusedTextColor = BbTextPrimary
+                        ),
+                        shape = RoundedCornerShape(8.dp)
                     )
-                    Spacer(Modifier.weight(1f))
-                    BrowserGenreDropdown(
-                        genres = state.genres,
-                        selectedGenre = state.selectedGenre,
-                        onGenreSelected = { viewModel.selectGenre(it) }
-                    )
-                    Spacer(Modifier.width(12.dp))
-                    BrowserCategoryDropdown(
-                        categories = state.categories,
-                        selectedCategory = state.selectedCategory,
-                        onCategorySelected = { viewModel.selectCategory(it) }
-                    )
+                } else {
+                    // TV / Landscape Layout: Single Row
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (contentType == "series") "TV Shows" else "Movies",
+                            color = BbAccent,
+                            fontSize = 22.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(Modifier.weight(1f))
+                        // NEW: Search field (left of Genres filter); debounced in the VM
+                        OutlinedTextField(
+                            value = state.searchQuery,
+                            onValueChange = { viewModel.updateSearch(it) },
+                            modifier = Modifier.width(260.dp),
+                            placeholder = { Text("Search...", color = BbTextSecondary) },
+                            leadingIcon = { Icon(Icons.Default.Search, null, tint = BbTextSecondary) },
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = BbAccent,
+                                unfocusedBorderColor = BbCard,
+                                cursorColor = BbAccent,
+                                focusedTextColor = BbTextPrimary,
+                                unfocusedTextColor = BbTextPrimary
+                            ),
+                            shape = RoundedCornerShape(8.dp)
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        BrowserGenreDropdown(
+                            genres = state.genres,
+                            selectedGenre = state.selectedGenre,
+                            onGenreSelected = { viewModel.selectGenre(it) }
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        BrowserCategoryDropdown(
+                            categories = state.categories,
+                            selectedCategory = state.selectedCategory,
+                            onCategorySelected = { viewModel.selectCategory(it) }
+                        )
+                    }
                 }
+
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
                     items(state.rows, key = { it.id }) { row ->
                         CarouselRow(
@@ -149,7 +224,7 @@ private fun BrowserGenreDropdown(
 ) {
     var expanded by remember { mutableStateOf(false) }
     var isFocused by remember { mutableStateOf(false) }
-    Box(modifier = Modifier.width(220.dp)) {
+    Box(modifier = Modifier.width(180.dp)) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -212,7 +287,7 @@ private fun BrowserCategoryDropdown(
 ) {
     var expanded by remember { mutableStateOf(false) }
     var isFocused by remember { mutableStateOf(false) }
-    Box(modifier = Modifier.width(220.dp)) {
+    Box(modifier = Modifier.width(180.dp)) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
