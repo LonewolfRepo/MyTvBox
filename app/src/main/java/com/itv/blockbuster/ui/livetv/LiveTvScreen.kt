@@ -42,6 +42,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -79,8 +80,11 @@ fun LiveTvScreen(
     val formFactor = rememberFormFactor()
     val isTvOrLandscape = formFactor != FormFactor.MOBILE_PORTRAIT
     val isPortrait = formFactor == FormFactor.MOBILE_PORTRAIT
-    var searchQuery by remember { mutableStateOf("") }
-    var sortMode by remember { mutableStateOf(SortMode.DEFAULT) }
+
+    // FIX: Use rememberSaveable so state survives navigation away and back
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var sortMode by rememberSaveable { mutableStateOf(SortMode.DEFAULT) }
+
     val configuration = LocalConfiguration.current
     val dropdownWidth = (configuration.screenWidthDp.dp * 0.35f)
     val favoriteIds by viewModel.favoriteIds.collectAsState()
@@ -130,22 +134,54 @@ fun LiveTvScreen(
                         state.selectedCategory?.id == "0" ||
                         state.selectedCategory?.id == "all" ||
                         state.selectedCategory == null
-                val filteredChannels = if (isAllCategory) {
+
+                // 1. Filter by Category
+                val categoryFiltered = if (isAllCategory) {
                     state.allChannels
                 } else {
                     state.allChannels.filter { it.genreId == state.selectedCategory?.id }
                 }
 
-                if (filteredChannels.isEmpty()) {
+                // 2. Filter by Search Query
+                val searchFiltered = if (searchQuery.isBlank()) {
+                    categoryFiltered
+                } else {
+                    val query = searchQuery.trim().lowercase()
+                    categoryFiltered.filter { channel ->
+                        channel.name.lowercase().contains(query) ||
+                                channel.number.lowercase().contains(query) ||
+                                channel.nowPlaying.lowercase().contains(query)
+                    }
+                }
+
+                // 3. Apply Sorting
+                val sortedChannels = when (sortMode) {
+                    SortMode.DEFAULT -> searchFiltered
+                    SortMode.A_Z -> searchFiltered.sortedBy { it.name.lowercase() }
+                    SortMode.Z_A -> searchFiltered.sortedByDescending { it.name.lowercase() }
+                    SortMode.NUMERIC -> searchFiltered.sortedWith(
+                        compareBy(
+                            // Try to parse as Double for "10.1" cases.
+                            // Fallback to Double.MAX_VALUE to push non-numeric strings (e.g., "HD 1") to the end.
+                            { it.number.toDoubleOrNull() ?: Double.MAX_VALUE },
+                            { it.number } // Tie-breaker
+                        )
+                    )
+                }
+
+                if (sortedChannels.isEmpty()) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("No channels in this category", color = BbTextMuted)
+                        Text(
+                            text = if (searchQuery.isNotBlank()) "No channels match your search" else "No channels in this category",
+                            color = BbTextMuted
+                        )
                     }
                 } else {
-                    // FIX: Carousels ONLY for ALL on TV/landscape.
+                    // Carousels ONLY for ALL on TV/landscape.
                     // Everything else (portrait ALL + all specific categories) uses the tile grid.
                     if (isAllCategory && isTvOrLandscape) {
                         LazyColumn(modifier = Modifier.fillMaxSize()) {
-                            val grouped = filteredChannels.groupBy { it.genreId }
+                            val grouped = sortedChannels.groupBy { it.genreId }
                             state.categories.forEach { cat ->
                                 if (cat.id == "*" || cat.id == "0" || cat.id == "all") return@forEach
                                 val channelsInCat = grouped[cat.id] ?: return@forEach
@@ -154,7 +190,7 @@ fun LiveTvScreen(
                                         ChannelCarouselRow(
                                             title = cat.title,
                                             channels = channelsInCat,
-                                            favoriteIds = favoriteIds,          // FIX: was missing
+                                            favoriteIds = favoriteIds,
                                             onChannelClick = { channel ->
                                                 viewModel.getStreamUrl(channel.cmd) { url ->
                                                     onPlayChannel(url, channel.id)
@@ -163,7 +199,7 @@ fun LiveTvScreen(
                                             onChannelLongClick = { channel ->
                                                 if (channel.hasArchive) onOpenCatchup(channel.id)
                                             },
-                                            onFavoriteIconClick = { channel ->  // FIX: was missing
+                                            onFavoriteIconClick = { channel ->
                                                 viewModel.toggleFavorite(channel)
                                             }
                                         )
@@ -173,7 +209,7 @@ fun LiveTvScreen(
                             item { Spacer(Modifier.height(32.dp)) }
                         }
                     } else {
-                        // Tile grid: specific categories (any form factor) + portrait ALL
+                        // Tile grid: specific categories (any form factor) + portrait ALL + Search Results
                         LazyVerticalGrid(
                             columns = GridCells.Adaptive(minSize = 150.dp),
                             contentPadding = PaddingValues(24.dp),
@@ -181,7 +217,7 @@ fun LiveTvScreen(
                             verticalArrangement = Arrangement.spacedBy(12.dp),
                             modifier = Modifier.fillMaxSize()
                         ) {
-                            items(filteredChannels, key = { it.id }) { channel ->
+                            items(sortedChannels, key = { it.id }) { channel ->
                                 ChannelTile(
                                     channel = channel,
                                     isFavorite = favoriteIds.contains(channel.id),
@@ -207,7 +243,6 @@ fun LiveTvScreen(
 // =====================================================================
 // UNIFIED TOP BAR (Adaptive)
 // =====================================================================
-
 @Composable
 private fun LiveTvTopBar(
     categories: List<PortalCategory>,
@@ -240,6 +275,29 @@ private fun LiveTvTopBar(
                     categories = categories,
                     selectedCategory = selectedCategory,
                     onCategorySelected = onCategorySelected
+                )
+            }
+            // Search bar for Portrait
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            ) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = onSearchQueryChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("Search channels...", color = BbTextMuted) },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = BbTextMuted) },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = BbAccent,
+                        unfocusedBorderColor = BbTextMuted.copy(alpha = 0.3f),
+                        cursorColor = BbAccent,
+                        focusedTextColor = BbTextPrimary,
+                        unfocusedTextColor = BbTextPrimary
+                    ),
+                    shape = RoundedCornerShape(8.dp)
                 )
             }
         }
