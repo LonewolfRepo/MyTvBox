@@ -1,5 +1,6 @@
 package com.itv.blockbuster.ui.guide
 
+import android.app.Activity
 import android.view.TextureView
 import android.view.ViewGroup
 import androidx.compose.foundation.Canvas
@@ -60,6 +61,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -105,12 +107,16 @@ fun TvGuideScreen(
     val pxPerMin = if (isPortrait) 2.5.dp else 5.dp
     val channelCol = if (isPortrait) CHANNEL_COL_PORTRAIT else CHANNEL_COL_TV
     val gridStart = (state.nowMin / 30) * 30
-
     var searchQuery by remember { mutableStateOf("") }
     var sortMode by remember { mutableStateOf(SortMode.DEFAULT) }
     val listState = rememberLazyListState()
     val configuration = LocalConfiguration.current
     val dropdownWidth = (configuration.screenWidthDp.dp * 0.28f)
+    val context = LocalContext.current
+
+    // React to fullscreen enter/exit so the PIP surface is (re)bound safely
+    val fullscreenActive by viewModel.playbackManager.isFullscreenActiveFlow.collectAsState()
+    val textureViewRef = remember { mutableStateOf<TextureView?>(null) }
 
     // Search + Sort pipeline (category filtering is handled by the ViewModel)
     val searchFiltered = if (searchQuery.isBlank()) state.channels else run {
@@ -140,11 +146,47 @@ fun TvGuideScreen(
         if (index >= 0) listState.scrollToItem(index)
     }
 
-    // Pause preview when leaving the guide (unless handed to fullscreen player)
+    // FIX: Destroy the PIP stream ONLY when really leaving the guide.
+    // Skip teardown when handing off to fullscreen, or when the activity is
+    // being recreated (orientation flip in portrait).
     DisposableEffect(Unit) {
         onDispose {
-            if (!viewModel.playbackManager.isFullscreenActive) {
-                viewModel.playbackManager.player.pause()
+            val pm = viewModel.playbackManager
+            val recreating = (context as? Activity)?.isChangingConfigurations == true
+            if (!recreating) {
+                if (pm.isFullscreenActive) {
+                    // The guide is being destroyed while the fullscreen player is active.
+                    // The hand-back will never happen, so clear the flag to prevent the
+                    // player from leaking when it eventually closes.
+                    pm.keepLivePlayingOnExit = false
+                } else if (!pm.keepLivePlayingOnExit) {
+                    pm.player.stop()
+                    pm.player.clearMediaItems()
+                    pm.clearLiveContext()
+                }
+            }
+        }
+    }
+
+    // FIX: race-proof PIP (re)bind. Runs on first composition and every time
+    // fullscreen goes true -> false, AFTER the fullscreen player has detached.
+    LaunchedEffect(fullscreenActive) {
+        if (!fullscreenActive) {
+            // The hand-off to fullscreen is complete. Clear the flag so that
+            // subsequent navigation away from the guide correctly stops the player.
+            viewModel.playbackManager.keepLivePlayingOnExit = false
+
+            delay(200)
+            textureViewRef.value?.let { view ->
+                viewModel.playbackManager.player.setVideoTextureView(view)
+            }
+            val pm = viewModel.playbackManager
+            val preview = viewModel.uiState.value.previewChannel
+            when {
+                pm.player.currentMediaItem == null && preview != null ->
+                    viewModel.selectForPreview(preview)
+                pm.player.currentMediaItem != null && !pm.player.isPlaying ->
+                    pm.player.play()
             }
         }
     }
@@ -154,145 +196,46 @@ fun TvGuideScreen(
     val nowProgram = previewPrograms.firstOrNull {
         parseMinutes(it.time) <= state.nowMin && parseMinutes(it.time) + it.duration > state.nowMin
     } ?: previewPrograms.firstOrNull()
+    val nextProgram = nowProgram?.let { current ->
+        previewPrograms.firstOrNull { parseMinutes(it.time) > parseMinutes(current.time) }
+    }
 
     Column(Modifier.fillMaxSize().background(BbBackground)) {
-        // ── Top bar: player (top-left) + now-playing info + filters ──
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = if (isPortrait) 12.dp else 24.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // 1) PLAYER TOP-LEFT
-            Box(
+        // ── ROW 1: Search / Clock / Sort / Category ──
+        if (isPortrait) {
+            Row(
                 modifier = Modifier
-                    .width(if (isPortrait) PLAYER_WIDTH_PORTRAIT else PLAYER_WIDTH_TV)
-                    .aspectRatio(16f / 9f)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(Color.Black)
-                    .then(
-                        if (preview != null) Modifier.border(2.dp, BbAccent, RoundedCornerShape(8.dp))
-                        else Modifier
-                    )
-                    .clickable {
-                        // Tap player -> fullscreen current preview
-                        val url = state.previewUrl
-                        if (url != null && preview != null) onPlayLive(url, preview.id)
-                    }
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.End
             ) {
-                AndroidView(
-                    factory = { ctx ->
-                        TextureView(ctx).apply {
-                            layoutParams = ViewGroup.LayoutParams(
-                                ViewGroup.LayoutParams.MATCH_PARENT,
-                                ViewGroup.LayoutParams.MATCH_PARENT
-                            )
-                        }
-                    },
-                    update = { view ->
-                        if (!viewModel.playbackManager.isFullscreenActive) {
-                            viewModel.playbackManager.player.setVideoTextureView(view)
-                        }
-                    },
-                    modifier = Modifier.fillMaxSize()
-                )
-                if (preview == null) {
-                    Text(
-                        "No preview",
-                        color = BbTextMuted,
-                        fontSize = 11.sp,
-                        modifier = Modifier.align(Alignment.Center)
-                    )
-                }
-            }
-
-            Spacer(Modifier.width(16.dp))
-
-            // 2) NOW PLAYING INFO
-            Column(Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (preview?.logoUrl?.isNotEmpty() == true) {
-                        AsyncImage(
-                            model = preview.logoUrl,
-                            contentDescription = null,
-                            modifier = Modifier.size(28.dp),
-                            contentScale = ContentScale.Fit
-                        )
-                        Spacer(Modifier.width(8.dp))
-                    }
-                    Text(
-                        text = preview?.name ?: "Select a channel",
-                        color = BbTextPrimary,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Spacer(Modifier.width(12.dp))
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(BbCard)
+                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                ) {
                     Text(state.clock, color = BbTextSecondary, fontSize = 14.sp)
                 }
-                if (preview != null && nowProgram != null) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = nowProgram.name,
-                            color = BbTextSecondary,
-                            fontSize = 13.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Spacer(Modifier.width(10.dp))
-                        Text(
-                            text = "${formatMin(parseMinutes(nowProgram.time))} - " +
-                                    formatMin(parseMinutes(nowProgram.time) + nowProgram.duration),
-                            color = BbTextMuted,
-                            fontSize = 12.sp
-                        )
-                        Spacer(Modifier.width(10.dp))
-                        Text("● Live", color = BbAccent, fontSize = 12.sp)
+                Spacer(Modifier.width(12.dp))
+                SortIconButton(mode = sortMode) {
+                    sortMode = when (sortMode) {
+                        SortMode.DEFAULT -> SortMode.A_Z
+                        SortMode.A_Z -> SortMode.Z_A
+                        SortMode.Z_A -> SortMode.NUMERIC
+                        SortMode.NUMERIC -> SortMode.DEFAULT
                     }
                 }
-            }
-
-            // 3) SEARCH / SORT / CATEGORY (same pattern as Live TV)
-            if (!isPortrait) {
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    modifier = Modifier.width(220.dp),
-                    placeholder = { Text("Search channels...", color = BbTextMuted) },
-                    leadingIcon = { Icon(Icons.Default.Search, null, tint = BbTextMuted) },
-                    singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = BbAccent,
-                        unfocusedBorderColor = BbTextMuted.copy(alpha = 0.3f),
-                        cursorColor = BbAccent,
-                        focusedTextColor = BbTextPrimary,
-                        unfocusedTextColor = BbTextPrimary
-                    ),
-                    shape = RoundedCornerShape(8.dp)
-                )
                 Spacer(Modifier.width(12.dp))
-            }
-            SortIconButton(mode = sortMode) {
-                sortMode = when (sortMode) {
-                    SortMode.DEFAULT -> SortMode.A_Z
-                    SortMode.A_Z -> SortMode.Z_A
-                    SortMode.Z_A -> SortMode.NUMERIC
-                    SortMode.NUMERIC -> SortMode.DEFAULT
+                Box(modifier = Modifier.width(140.dp)) {
+                    CategoryDropdown(
+                        categories = state.categories,
+                        selectedCategory = state.selectedCategory,
+                        onCategorySelected = { viewModel.selectCategory(it) }
+                    )
                 }
             }
-            Spacer(Modifier.width(12.dp))
-            Box(modifier = Modifier.width(if (isPortrait) 140.dp else dropdownWidth)) {
-                CategoryDropdown(
-                    categories = state.categories,
-                    selectedCategory = state.selectedCategory,
-                    onCategorySelected = { viewModel.selectCategory(it) }
-                )
-            }
-        }
-
-        // Portrait: search field on its own row
-        if (isPortrait) {
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
@@ -311,6 +254,140 @@ fun TvGuideScreen(
                 ),
                 shape = RoundedCornerShape(8.dp)
             )
+        } else {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    modifier = Modifier.weight(1f),
+                    placeholder = { Text("Search channels...", color = BbTextMuted) },
+                    leadingIcon = { Icon(Icons.Default.Search, null, tint = BbTextMuted) },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = BbAccent,
+                        unfocusedBorderColor = BbTextMuted.copy(alpha = 0.3f),
+                        cursorColor = BbAccent,
+                        focusedTextColor = BbTextPrimary,
+                        unfocusedTextColor = BbTextPrimary
+                    ),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                Spacer(Modifier.width(12.dp))
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(BbCard)
+                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                ) {
+                    Text(state.clock, color = BbTextSecondary, fontSize = 14.sp)
+                }
+                Spacer(Modifier.width(12.dp))
+                SortIconButton(mode = sortMode) {
+                    sortMode = when (sortMode) {
+                        SortMode.DEFAULT -> SortMode.A_Z
+                        SortMode.A_Z -> SortMode.Z_A
+                        SortMode.Z_A -> SortMode.NUMERIC
+                        SortMode.NUMERIC -> SortMode.DEFAULT
+                    }
+                }
+                Spacer(Modifier.width(12.dp))
+                Box(modifier = Modifier.width(dropdownWidth)) {
+                    CategoryDropdown(
+                        categories = state.categories,
+                        selectedCategory = state.selectedCategory,
+                        onCategorySelected = { viewModel.selectCategory(it) }
+                    )
+                }
+            }
+        }
+
+        // ── ROW 2: PIP player (left) + Channel Info (right) ──
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = if (isPortrait) 12.dp else 24.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // PIP PLAYER
+            Box(
+                modifier = Modifier
+                    .width(if (isPortrait) PLAYER_WIDTH_PORTRAIT else PLAYER_WIDTH_TV)
+                    .aspectRatio(16f / 9f)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color.Black)
+                    .then(
+                        if (preview != null) Modifier.border(2.dp, BbAccent, RoundedCornerShape(8.dp))
+                        else Modifier
+                    )
+                    .clickable {
+                        // Tap player -> fullscreen current preview (stream keeps playing)
+                        val url = state.previewUrl
+                        if (url != null && preview != null) {
+                            viewModel.playbackManager.keepLivePlayingOnExit = true
+                            onPlayLive(url, preview.id)
+                        }
+                    }
+            ) {
+                AndroidView(
+                    factory = { ctx ->
+                        TextureView(ctx).apply {
+                            layoutParams = ViewGroup.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.MATCH_PARENT
+                            )
+                            textureViewRef.value = this
+                        }
+                    },
+                    // GUARDED: never steal the video surface while fullscreen.
+                    update = { view ->
+                        if (!viewModel.playbackManager.isFullscreenActive) {
+                            viewModel.playbackManager.player.setVideoTextureView(view)
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+                if (preview == null) {
+                    Text(
+                        "No preview",
+                        color = BbTextMuted,
+                        fontSize = 11.sp,
+                        modifier = Modifier.align(Alignment.Center)
+                    )
+                }
+            }
+            Spacer(Modifier.width(16.dp))
+            // CHANNEL INFO: Name / Now / Next on separate lines
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = preview?.name ?: "Select a channel",
+                    color = BbTextPrimary,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "Now: ${nowProgram?.name ?: "No info"}",
+                    color = BbTextSecondary,
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = "Next: ${nextProgram?.name ?: "-"}",
+                    color = BbTextMuted,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
 
         // ── Time header ──
@@ -363,6 +440,7 @@ fun TvGuideScreen(
                                     if (state.previewChannel?.id == channel.id &&
                                         !state.previewUrl.isNullOrEmpty()
                                     ) {
+                                        viewModel.playbackManager.keepLivePlayingOnExit = true
                                         onPlayLive(state.previewUrl!!, channel.id)
                                     } else {
                                         viewModel.selectForPreview(channel)
@@ -377,6 +455,7 @@ fun TvGuideScreen(
                                             if (state.previewChannel?.id == channel.id &&
                                                 !state.previewUrl.isNullOrEmpty()
                                             ) {
+                                                viewModel.playbackManager.keepLivePlayingOnExit = true
                                                 onPlayLive(state.previewUrl!!, channel.id)
                                             } else {
                                                 viewModel.selectForPreview(channel)
@@ -391,7 +470,6 @@ fun TvGuideScreen(
                             viewModel.ensureEpg(channel.id)
                         }
                     }
-
                     // Current-time playhead line over the grid
                     Canvas(Modifier.matchParentSize()) {
                         val x = (channelCol + pxPerMin * (state.nowMin - gridStart)).toPx()
@@ -457,7 +535,15 @@ private fun GuideChannelRow(
                 .padding(horizontal = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("${index + 1}", color = BbTextMuted, fontSize = 12.sp, modifier = Modifier.width(24.dp))
+            // Show the channel's number (fallback: channel id, then row index)
+            Text(
+                text = channel.number.ifBlank { channel.id }.ifBlank { "${index + 1}" },
+                color = BbTextMuted,
+                fontSize = 11.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.width(32.dp)
+            )
             if (channel.logoUrl.isNotEmpty()) {
                 AsyncImage(
                     model = channel.logoUrl,
@@ -490,11 +576,8 @@ private fun GuideChannelRow(
                 if (gridStart - start > 12 * 60) start += 24 * 60
                 val end = start + program.duration
                 if (end <= gridStart || start >= gridStart + WINDOW_MIN) return@forEach
-
-                // FIX: Dp must be the first operand (Dp * Int is valid, Int * Dp is not)
                 val x = pxPerMin * (start - gridStart).coerceAtLeast(0)
                 val w = pxPerMin * program.duration.coerceAtLeast(15)
-
                 ProgramCell(
                     program = program,
                     modifier = Modifier
@@ -541,7 +624,7 @@ private fun ProgramCell(
 }
 
 // =====================================================================
-// TOP BAR CONTROLS (same pattern as Live TV)
+// TOP BAR CONTROLS
 // =====================================================================
 @Composable
 private fun SortIconButton(mode: SortMode, onClick: () -> Unit) {

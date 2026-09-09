@@ -7,6 +7,9 @@ import com.itv.blockbuster.domain.model.EpgProgram
 import com.itv.blockbuster.domain.model.PortalChannel
 import com.itv.blockbuster.domain.model.PortalVodItem
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -16,8 +19,24 @@ class PlaybackManager @Inject constructor(
 ) {
     val player: ExoPlayer by lazy { ExoPlayer.Builder(context).build() }
 
+    // NEW: StateFlow mirror of isFullscreenActive so Compose can react to
+    // fullscreen enter/exit and re-bind the PIP surface at the right time.
+    private val _isFullscreenActive = MutableStateFlow(false)
+    val isFullscreenActiveFlow: StateFlow<Boolean> = _isFullscreenActive.asStateFlow()
+
+    // FIX: no @Volatile here — a property with custom getter/setter has no backing
+    // field, and @Volatile is not applicable to it. MutableStateFlow.value is
+    // already thread-safe for reads and writes.
+    var isFullscreenActive: Boolean
+        get() = _isFullscreenActive.value
+        set(value) {
+            _isFullscreenActive.value = value
+        }
+
+    // When true, exiting the fullscreen player on a LIVE stream keeps the
+    // stream playing so the TV Guide PIP resumes seamlessly.
     @Volatile
-    var isFullscreenActive: Boolean = false
+    var keepLivePlayingOnExit: Boolean = false
 
     // ── Live context ──
     var currentChannel: PortalChannel? = null
@@ -36,7 +55,7 @@ class PlaybackManager @Inject constructor(
     // Skip resume and play from beginning
     var restartFromBeginning: Boolean = false
 
-    // NEW: resume target passed from VodDetailViewModel at play-click time.
+    // Resume target passed from VodDetailViewModel at play-click time.
     // -1 = no resume. Player seeks to this once STATE_READY, then resets to -1.
     var pendingSeekMs: Long = -1L
 

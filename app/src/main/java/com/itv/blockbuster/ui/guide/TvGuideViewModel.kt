@@ -35,14 +35,14 @@ data class GuideUiState(
     val clock: String = "",
     val previewChannel: PortalChannel? = null,
     val previewUrl: String? = null,
-    // NEW: channel the guide should land on (last played live channel)
+    // channel the guide should land on (last played live channel)
     val lastPlayedChannelId: String? = null
 )
 
 @HiltViewModel
 class TvGuideViewModel @Inject constructor(
     private val liveTvRepository: LiveTvRepository,
-    private val recentRepository: RecentRepository, // NEW
+    private val recentRepository: RecentRepository,
     private val prefs: UserPreferencesRepository,
     private val sessionManager: StalkerSessionManager,
     val playbackManager: PlaybackManager
@@ -66,21 +66,17 @@ class TvGuideViewModel @Inject constructor(
     private suspend fun load() {
         _uiState.update { it.copy(isLoading = true) }
         val allCats = liveTvRepository.getCategories().getOrDefault(emptyList())
-
-        // FIX: Identify and filter out censored categories (censored == 1)
+        // Identify and filter out censored categories (censored == 1)
         val censoredCategoryIds = allCats.filter { it.isCensored }.map { it.id }.toSet()
         val cats = allCats.filter { !it.isCensored }
-
-        // FIX: Filter out channels belonging to censored categories
+        // Filter out channels belonging to censored categories
         val allChannels = liveTvRepository.getAllChannels().getOrDefault(PortalPage(emptyList(), 0)).items
             .filter { it.genreId !in censoredCategoryIds }
-
-        // FIX: Properly handle "All" category so channels aren't filtered out
+        // Properly handle "All" category so channels aren't filtered out
         val default = cats.firstOrNull { it.id == "*" || it.id == "0" || it.id == "all" } ?: cats.firstOrNull()
         val isAll = default == null || default.id == "*" || default.id == "0" || default.id == "all"
         val filteredChannels = if (isAll) allChannels else allChannels.filter { it.genreId == default?.id }
-
-        // NEW: resolve last played live channel — active playback session first,
+        // Resolve last played live channel — active playback session first,
         // then the most recent LIVE entry from Recents (survives app restarts).
         val p = prefs.activeProfileIdFlow.first()
         val s = sessionManager.activePortal.value?.serverId ?: 0
@@ -90,7 +86,6 @@ class TvGuideViewModel @Inject constructor(
             .firstOrNull { it.type == "LIVE" }
             ?.itemId
         val lastPlayedId = sessionChannelId ?: recentChannelId
-
         _uiState.update {
             it.copy(
                 isLoading = false,
@@ -101,8 +96,7 @@ class TvGuideViewModel @Inject constructor(
                 lastPlayedChannelId = lastPlayedId
             )
         }
-
-        // NEW: auto-preview the last played channel so the top-left player resumes it
+        // Auto-preview the last played channel so the top-left player resumes it
         val lastChannel = filteredChannels.firstOrNull { it.id == lastPlayedId }
             ?: allChannels.firstOrNull { it.id == lastPlayedId }
         if (lastChannel != null) selectForPreview(lastChannel)
@@ -124,11 +118,12 @@ class TvGuideViewModel @Inject constructor(
 
     fun selectForPreview(channel: PortalChannel) {
         viewModelScope.launch {
-            // NEW: don't restart the stream if this channel is already previewing
+            // FIX: only skip restart when the player STILL HOLDS the media item.
+            // If a lifecycle race cleared the media, we must re-create the stream link.
             if (_uiState.value.previewChannel?.id == channel.id &&
-                !_uiState.value.previewUrl.isNullOrEmpty()
+                !_uiState.value.previewUrl.isNullOrEmpty() &&
+                playbackManager.player.currentMediaItem != null
             ) return@launch
-
             _uiState.update { it.copy(previewChannel = channel, previewUrl = null) }
             val url = liveTvRepository.createStreamLink(channel.cmd).getOrDefault("")
             val epg = liveTvRepository.getShortEpgCached(channel.id)

@@ -158,12 +158,28 @@ fun PlayerScreen(
             player.removeListener(listener)
             playbackManager.isFullscreenActive = false
             player.clearVideoSurface()
-            player.stop()
-            player.clearMediaItems()
-            playbackManager.clearLiveContext()
-            playbackManager.pendingSeekMs = -1L
-            activity?.requestedOrientation =
-                originalOrientation ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+
+            // FIX: If the activity is being recreated (orientation flip, which always
+            // happens when entering/exiting fullscreen in portrait), keep the media,
+            // the playback and the keepLive flag intact — the player is re-attached
+            // after recreation. Consuming keepLive here was killing portrait hand-back.
+            val recreating = (context as? Activity)?.isChangingConfigurations == true
+            if (!recreating) {
+                // If this live session was launched from the TV Guide PIP, keep the
+                // stream playing on exit so the PIP resumes seamlessly.
+                // NOTE: keepLivePlayingOnExit is NOT consumed here anymore; the guide
+                // clears it in resumePreviewIfNeeded() when it (re)enters composition.
+                val keepLive = isLive && playbackManager.keepLivePlayingOnExit
+                // playbackManager.keepLivePlayingOnExit = false
+                if (!keepLive) {
+                    player.stop()
+                    player.clearMediaItems()
+                    playbackManager.clearLiveContext()
+                    playbackManager.pendingSeekMs = -1L
+                }
+                activity?.requestedOrientation =
+                    originalOrientation ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            }
         }
     }
 
