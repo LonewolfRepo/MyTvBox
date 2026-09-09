@@ -60,8 +60,15 @@ class TvGuideViewModel @Inject constructor(
 
     private suspend fun load() {
         _uiState.update { it.copy(isLoading = true) }
-        val cats = liveTvRepository.getCategories().getOrDefault(emptyList())
+        val allCats = liveTvRepository.getCategories().getOrDefault(emptyList())
+
+        // FIX: Identify and filter out censored categories (censored == 1)
+        val censoredCategoryIds = allCats.filter { it.isCensored }.map { it.id }.toSet()
+        val cats = allCats.filter { !it.isCensored }
+
+        // FIX: Filter out channels belonging to censored categories
         val allChannels = liveTvRepository.getAllChannels().getOrDefault(PortalPage(emptyList(), 0)).items
+            .filter { it.genreId !in censoredCategoryIds }
 
         // FIX: Properly handle "All" category so channels aren't filtered out
         val default = cats.firstOrNull { it.id == "*" || it.id == "0" || it.id == "all" } ?: cats.firstOrNull()

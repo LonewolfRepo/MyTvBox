@@ -66,7 +66,6 @@ class LiveTvViewModel @Inject constructor(
                 Pair(p, sp?.serverId ?: 0)
             }.collect { connectAndLoad() }
         }
-
         viewModelScope.launch {
             combine(prefs.activeProfileIdFlow, sessionManager.activePortal) { p, sp ->
                 Pair(p, sp?.serverId ?: 0)
@@ -77,7 +76,6 @@ class LiveTvViewModel @Inject constructor(
             }
         }
     }
-
 
     private fun connectAndLoad() {
         viewModelScope.launch {
@@ -102,8 +100,16 @@ class LiveTvViewModel @Inject constructor(
 
     private suspend fun load() {
         _uiState.update { it.copy(isLoading = true) }
-        val cats = liveTvRepository.getCategories().getOrDefault(emptyList())
+        val allCats = liveTvRepository.getCategories().getOrDefault(emptyList())
+
+        // FIX: Identify and filter out censored categories (censored == 1)
+        val censoredCategoryIds = allCats.filter { it.isCensored }.map { it.id }.toSet()
+        val cats = allCats.filter { !it.isCensored }
+
+        // FIX: Filter out channels belonging to censored categories so they
+        // don't leak into the "All Categories" view.
         val all = liveTvRepository.getAllChannels().getOrDefault(PortalPage(emptyList(), 0)).items
+            .filter { it.genreId !in censoredCategoryIds }
 
         val p = prefs.activeProfileIdFlow.first()
         val s = sessionManager.activePortal.value?.serverId ?: 0
@@ -111,7 +117,6 @@ class LiveTvViewModel @Inject constructor(
 
         // STRICTLY apply visibility and sort order
         val ordered = CategorySortHelper.applyToCategories(cats, rawOrder)
-
         val default = ordered.firstOrNull { it.id == "*" || it.id == "0" || it.id == "all" } ?: ordered.firstOrNull()
 
         _uiState.update {
