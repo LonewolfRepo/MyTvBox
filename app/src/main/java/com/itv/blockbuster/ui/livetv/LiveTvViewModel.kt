@@ -8,6 +8,7 @@ import com.itv.blockbuster.data.player.PlaybackManager
 import com.itv.blockbuster.data.repository.ConnectionRepository
 import com.itv.blockbuster.data.repository.LiveTvRepository
 import com.itv.blockbuster.data.repository.ServerRepository
+import com.itv.blockbuster.data.session.AdultSessionManager
 import com.itv.blockbuster.data.session.StalkerSessionManager
 import com.itv.blockbuster.domain.model.PortalCategory
 import com.itv.blockbuster.domain.model.PortalChannel
@@ -44,7 +45,8 @@ class LiveTvViewModel @Inject constructor(
     private val settings: SettingsRepository,
     private val prefs: UserPreferencesRepository,
     private val sessionManager: StalkerSessionManager,
-    val playbackManager: PlaybackManager
+    val playbackManager: PlaybackManager,
+    private val adultSessionManager: AdultSessionManager // NEW
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(LiveTvUiState())
@@ -104,12 +106,24 @@ class LiveTvViewModel @Inject constructor(
 
         // FIX: Identify and filter out censored categories (censored == 1)
         val censoredCategoryIds = allCats.filter { it.isCensored }.map { it.id }.toSet()
-        val cats = allCats.filter { !it.isCensored }
+         //val cats = allCats.filter { !it.isCensored }
+        // NEW: Invert category filter for Adult mode
+        val isAdult = adultSessionManager.isAdultMode.value
+        val cats = allCats.filter { it.isCensored == isAdult }
+
+        val allRaw = liveTvRepository.getAllChannels().getOrDefault(PortalPage(emptyList(), 0)).items
 
         // FIX: Filter out channels belonging to censored categories so they
         // don't leak into the "All Categories" view.
-        val all = liveTvRepository.getAllChannels().getOrDefault(PortalPage(emptyList(), 0)).items
-            .filter { it.genreId !in censoredCategoryIds }
+       // val all = liveTvRepository.getAllChannels().getOrDefault(PortalPage(emptyList(), 0)).items .filter { it.genreId !in censoredCategoryIds }
+
+        // NEW: Filter channels based on Adult mode
+        val all = if (isAdult) {
+            allRaw.filter { it.genreId in censoredCategoryIds }
+        } else {
+            allRaw.filter { it.genreId !in censoredCategoryIds }
+        }
+
 
         val p = prefs.activeProfileIdFlow.first()
         val s = sessionManager.activePortal.value?.serverId ?: 0
@@ -147,6 +161,7 @@ class LiveTvViewModel @Inject constructor(
     }
 
     fun toggleFavorite(channel: PortalChannel) {
+        if (adultSessionManager.isAdultMode.value) return
         viewModelScope.launch {
             val p = prefs.activeProfileIdFlow.first()
             val s = sessionManager.activePortal.value?.serverId ?: 0

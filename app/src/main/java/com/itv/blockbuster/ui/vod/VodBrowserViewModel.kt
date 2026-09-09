@@ -6,6 +6,7 @@ import com.itv.blockbuster.data.local.SettingsRepository
 import com.itv.blockbuster.data.local.UserPreferencesRepository
 import com.itv.blockbuster.data.local.entity.PlaybackProgressEntity
 import com.itv.blockbuster.data.repository.VodRepository
+import com.itv.blockbuster.data.session.AdultSessionManager
 import com.itv.blockbuster.data.session.StalkerSessionManager
 import com.itv.blockbuster.domain.model.PortalCategory
 import com.itv.blockbuster.domain.model.PortalPage
@@ -44,7 +45,8 @@ class VodBrowserViewModel @Inject constructor(
     private val vodRepository: VodRepository,
     private val settings: SettingsRepository,
     private val prefs: UserPreferencesRepository,
-    private val sessionManager: StalkerSessionManager
+    private val sessionManager: StalkerSessionManager,
+    private val adultSessionManager: AdultSessionManager // NEW
 ) : ViewModel() {
 
     companion object {
@@ -83,8 +85,9 @@ class VodBrowserViewModel @Inject constructor(
      * level, instead of in VodRepository. The repository stays raw so a dedicated
      * Censored page can reuse the same data later.
      */
-    private fun List<PortalVodItem>.visible(): List<PortalVodItem> = filter { !it.isCensored }
-
+    // private fun List<PortalVodItem>.visible(): List<PortalVodItem> = filter { !it.isCensored }
+    private fun List<PortalVodItem>.visible(): List<PortalVodItem> =
+        filter { it.isCensored == adultSessionManager.isAdultMode.value }
     fun initialize(type: String) {
         if (isInitialized && _contentType == type) return
         _contentType = type
@@ -127,6 +130,7 @@ class VodBrowserViewModel @Inject constructor(
     }
 
     fun toggleFavorite(item: PortalVodItem) {
+        if (adultSessionManager.isAdultMode.value) return
         viewModelScope.launch {
             val p = prefs.activeProfileIdFlow.first()
             val s = sessionManager.activePortal.value?.serverId ?: 0
@@ -137,9 +141,12 @@ class VodBrowserViewModel @Inject constructor(
     private suspend fun loadInitialData(profileId: Int, serverId: Int) {
         _state.update { it.copy(isLoading = true) }
         try {
+            // NEW: Invert category filter for Adult mode
+            val isAdult = adultSessionManager.isAdultMode.value
             // Censored categories stay hidden on Movies / TV Shows (dedicated page later)
-            val masterCats = vodRepository.getCategories().getOrDefault(emptyList())
-                .filter { !it.isCensored }
+            //val masterCats = vodRepository.getCategories().getOrDefault(emptyList())   .filter { !it.isCensored }
+            val masterCats = vodRepository.getCategories().getOrDefault(emptyList()).filter { it.isCensored == isAdult }
+
             val masterGenres = vodRepository.getGenres().getOrDefault(emptyList())
 
             val orderKey = if (_contentType == "series") "order_series" else "order_vod"
@@ -147,7 +154,8 @@ class VodBrowserViewModel @Inject constructor(
             val ordered = CategorySortHelper.applyToCategories(masterCats, rawOrder)
             val filteredOrdered = ordered.filter { it.id != "*" && it.id != "0" }
 
-            val uncensoredGenres = masterGenres.filter { !it.isCensored }
+            //val uncensoredGenres = masterGenres.filter { !it.isCensored }
+            val uncensoredGenres = masterGenres.filter { it.isCensored == isAdult }
 
             _allCategories.value = filteredOrdered
             val initialBatch = filteredOrdered.take(5)

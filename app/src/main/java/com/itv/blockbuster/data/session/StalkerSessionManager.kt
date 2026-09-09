@@ -37,6 +37,10 @@ class StalkerSessionManager @Inject constructor() {
     private val _cookies = MutableStateFlow<Set<String>>(emptySet())
     val cookies: StateFlow<Set<String>> = _cookies.asStateFlow()
 
+    // NEW: Parent password for Adult section verification
+    private val _parentPassword = MutableStateFlow("")
+    val parentPassword: StateFlow<String> = _parentPassword.asStateFlow()
+
     fun setActivePortal(portal: ActivePortal) {
         _activePortal.value = portal
     }
@@ -52,6 +56,8 @@ class StalkerSessionManager @Inject constructor() {
     fun setAjaxLoader(url: String) {
         _ajaxLoader.value = url
     }
+
+    fun setParentPassword(password: String) { _parentPassword.value = password }
 
     fun appendCookie(cookie: String) {
         val cleaned = cookie.trim()

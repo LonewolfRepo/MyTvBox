@@ -50,6 +50,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.runtime.collectAsState
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -73,7 +74,8 @@ private val RailSections = listOf(
     AppSection.LIVE_TV,
     AppSection.TV_GUIDE,
     AppSection.MY_LIST,
-    AppSection.RECENT
+    AppSection.RECENT,
+    AppSection.ADULT // NEW
 )
 
 private val MenuSections = listOf(
@@ -83,7 +85,8 @@ private val MenuSections = listOf(
     AppSection.LIVE_TV,
     AppSection.TV_GUIDE,
     AppSection.MY_LIST,
-    AppSection.RECENT
+    AppSection.RECENT,
+    AppSection.ADULT // NEW
 )
 
 @Composable
@@ -92,15 +95,17 @@ fun AppShell(
     content: @Composable () -> Unit
 ) {
     // Inject AppShellViewModel to activate watchdog lifecycle management
-    hiltViewModel<AppShellViewModel>()
+    // FIX: Assign the ViewModel to a variable instead of just calling it
+    val shellViewModel: AppShellViewModel = hiltViewModel()
+    val showAdult by shellViewModel.displayAdultContent.collectAsState()
 
     val formFactor = rememberFormFactor()
     val currentRoute =
         navController.currentBackStackEntryAsState().value?.destination?.route
 
     when (formFactor) {
-        FormFactor.MOBILE_PORTRAIT -> PortraitShell(navController, currentRoute, content)
-        else -> RailShell(navController, currentRoute, content)
+        FormFactor.MOBILE_PORTRAIT -> PortraitShell(navController, currentRoute, content, showAdult)
+        else -> RailShell(navController, currentRoute, content, showAdult)
     }
 }
 
@@ -112,13 +117,16 @@ fun AppShell(
 private fun RailShell(
     navController: NavHostController,
     currentRoute: String?,
-    content: @Composable () -> Unit
+    content: @Composable () -> Unit,
+    showAdult: Boolean
 ) {
     var railExpanded by remember { mutableStateOf(false) }
     val railWidth by animateDpAsState(
         targetValue = if (railExpanded) 280.dp else 84.dp,
         label = "railWidth"
     )
+
+    val visibleRailSections = RailSections.filter { it != AppSection.ADULT || showAdult }
 
     Row(modifier = Modifier.fillMaxSize().background(BbBackground)) {
         Column(
@@ -159,7 +167,7 @@ private fun RailShell(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                RailSections.forEach { section ->
+                visibleRailSections.forEach { section ->
                     RailItem(
                         icon = section.icon,
                         label = section.label,
@@ -247,7 +255,7 @@ private fun RailItem(
 private fun PortraitShell(
     navController: NavHostController,
     currentRoute: String?,
-    content: @Composable () -> Unit
+    content: @Composable () -> Unit, showAdult: Boolean
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     val currentLabel = when (currentRoute) {
@@ -305,7 +313,8 @@ private fun PortraitShell(
                         menuOpen = false
                         navController.navigateToSection(route)
                     },
-                    onClose = { menuOpen = false }
+                    onClose = { menuOpen = false },
+                    showAdult = showAdult // NEW
                 )
             }
         }
@@ -359,8 +368,12 @@ private fun PortraitShell(
 private fun OverlayMenu(
     currentRoute: String?,
     onSelect: (String) -> Unit,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    showAdult: Boolean
 ) {
+    // NEW: Filter out Adult if setting is off
+    val visibleMenuSections = MenuSections.filter { it != AppSection.ADULT || showAdult }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -369,7 +382,7 @@ private fun OverlayMenu(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        MenuSections.forEach { section ->
+        visibleMenuSections.forEach { section ->
             val active = currentRoute == section.route
             Text(
                 text = section.label,

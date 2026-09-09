@@ -10,6 +10,7 @@ import com.itv.blockbuster.data.repository.ServerRepository
 import com.itv.blockbuster.data.repository.StalkerPortalService
 import com.itv.blockbuster.data.repository.VodRepository
 import com.itv.blockbuster.data.session.StalkerSessionManager
+import com.itv.blockbuster.data.session.AdultSessionManager
 import com.itv.blockbuster.domain.model.PortalCategory
 import com.itv.blockbuster.domain.model.PortalPage
 import com.itv.blockbuster.domain.model.PortalVodItem
@@ -57,7 +58,8 @@ class HomeViewModel @Inject constructor(
     private val vodRepository: VodRepository,
     private val sessionManager: StalkerSessionManager,
     private val prefs: UserPreferencesRepository,
-    private val settings: SettingsRepository
+    private val settings: SettingsRepository,
+    private val adultSessionManager: AdultSessionManager // NEW
 ) : ViewModel() {
 
     companion object {
@@ -94,7 +96,10 @@ class HomeViewModel @Inject constructor(
      * TV Shows) instead of in VodRepository, so a dedicated Censored page can
      * reuse the raw repository data later.
      */
-    private fun List<PortalVodItem>.visible(): List<PortalVodItem> = filter { !it.isCensored }
+    // private fun List<PortalVodItem>.visible(): List<PortalVodItem> = filter { !it.isCensored }
+
+    private fun List<PortalVodItem>.visible(): List<PortalVodItem> =
+        filter { it.isCensored == adultSessionManager.isAdultMode.value } // CHANGED
 
     init {
         viewModelScope.launch {
@@ -141,6 +146,7 @@ class HomeViewModel @Inject constructor(
     }
 
     fun toggleFavorite(item: PortalVodItem) {
+        if (adultSessionManager.isAdultMode.value) return
         viewModelScope.launch {
             val p = prefs.activeProfileIdFlow.firstOrNull() ?: return@launch
             val s = sessionManager.activePortal.value?.serverId ?: 0
@@ -199,8 +205,11 @@ class HomeViewModel @Inject constructor(
         val categories = portalService.fetchVodCategories().getOrDefault(emptyList())
         val genres = portalService.fetchVodGenres().getOrDefault(emptyList())
 
-        val uncensoredCategories = categories.filter { !it.isCensored }
-        val uncensoredGenres = genres.filter { !it.isCensored }
+        // NEW: Invert filter for Adult mode
+        val isAdult = adultSessionManager.isAdultMode.value
+        val uncensoredCategories = categories.filter { it.isCensored == isAdult }
+        val uncensoredGenres = genres.filter { it.isCensored == isAdult }
+
 
         // Respect Home Category Settings:
         //  - only categories marked visible are kept

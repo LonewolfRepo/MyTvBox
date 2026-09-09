@@ -51,4 +51,8 @@ class SettingsRepository @Inject constructor(
     suspend fun setString(p: Int, s: Int, n: String, v: String) {
         dataStore.edit { it[sk(p, s, n)] = v }
     }
+
+    // NEW: Reactively observe boolean settings for the shell
+    fun getBoolFlow(p: Int, s: Int, n: String, def: Boolean): Flow<Boolean> =
+        dataStore.data.map { it[bk(p, s, n)] ?: def }
 }

@@ -20,6 +20,9 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import androidx.compose.runtime.LaunchedEffect
+import androidx.navigation.compose.currentBackStackEntryAsState
+import com.itv.blockbuster.ui.shell.AppShellViewModel
 import com.itv.blockbuster.ui.catchup.CatchupScreen
 import com.itv.blockbuster.ui.common.SectionPlaceholder
 import com.itv.blockbuster.ui.guide.TvGuideScreen
@@ -39,6 +42,8 @@ import com.itv.blockbuster.ui.theme.BbBackground
 import com.itv.blockbuster.ui.vod.VodBrowserScreen
 import com.itv.blockbuster.ui.vod.VodEpisodesScreen
 import com.itv.blockbuster.ui.vod.VodDetailScreen
+import com.itv.blockbuster.ui.adult.AdultHubScreen
+import com.itv.blockbuster.data.session.AdultSessionManager
 import kotlinx.coroutines.launch
 
 object Routes {
@@ -53,11 +58,16 @@ object Routes {
     val TV_GUIDE = AppSection.TV_GUIDE.route
     val MY_LIST = AppSection.MY_LIST.route
     val RECENT = AppSection.RECENT.route
+
+    val ADULT = AppSection.ADULT.route // NEW
     val SETTINGS = AppSection.SETTINGS.route
     const val VOD_BROWSER = "vod_browser/{contentType}"
     const val VOD_DETAIL = "vod_detail/{itemId}/{contentType}"
     const val PLAYER = "player/{streamUrl}/{channelId}/{videoId}"
     const val CATCHUP = "catchup/{channelId}"
+
+    const val ADULT_LIVE_TV = "adult_live_tv" // NEW
+    const val ADULT_VOD_BROWSER = "adult_vod_browser" // NEW
 }
 
 enum class FormFactor { TV, MOBILE_PORTRAIT, MOBILE_LANDSCAPE }
@@ -111,7 +121,16 @@ fun AppNavigation(
     val navController = rememberNavController()
     val scope = rememberCoroutineScope()
     val startupViewModel: StartupViewModel = hiltViewModel() // same activity-scoped instance as AppRoot
+    val shellViewModel: AppShellViewModel = hiltViewModel() // NEW
+    val adultSessionManager = shellViewModel.adultSessionManager // NEW
 
+    // NEW: Observe route to toggle Adult Mode globally
+    val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route
+    LaunchedEffect(currentRoute) {
+        val isAdultRoute = currentRoute?.startsWith("adult") == true || currentRoute == Routes.ADULT
+        if (isAdultRoute) adultSessionManager.enterAdultMode()
+        else adultSessionManager.exitAdultMode()
+    }
     NavHost(
         navController = navController,
         // CHANGE 2: when the picker is skipped, open the configured section directly
@@ -201,6 +220,32 @@ fun AppNavigation(
                     onOpenVod = { itemId, type ->
                         navController.navigate("vod_detail/$itemId/$type")
                     }
+                )
+            }
+        }
+
+        composable(Routes.ADULT) {
+            AppShell(navController) {
+                AdultHubScreen(
+                    onNavigateToLive = { navController.navigate(Routes.ADULT_LIVE_TV) },
+                    onNavigateToVod = { navController.navigate(Routes.ADULT_VOD_BROWSER) }
+                )
+            }
+        }
+
+        composable(Routes.ADULT_LIVE_TV) {
+            AppShell(navController) {
+                LiveTvScreen(
+                    onPlayChannel = { url, channelId -> navController.navigate("player/${encodeUrl(url)}/$channelId/none") },
+                    onOpenCatchup = { channelId -> navController.navigate("catchup/$channelId") }
+                )
+            }
+        }
+        composable(Routes.ADULT_VOD_BROWSER) {
+            AppShell(navController) {
+                HomeScreen(
+                    onOpenPortals = { navController.navigateToSection(Routes.SERVERS) },
+                    onOpenVodDetail = { itemId, type -> navController.navigate("vod_detail/$itemId/$type") }
                 )
             }
         }

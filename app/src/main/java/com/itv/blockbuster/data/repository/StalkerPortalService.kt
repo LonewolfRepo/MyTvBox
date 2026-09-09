@@ -117,6 +117,7 @@ class StalkerPortalService @Inject constructor(
             throw IOException(errorMessage)
         }
         session.setAjaxLoader("$cleanHost${detectedPath}server/load.php")
+        session.setParentPassword(profileResponse.js.parentPassword ?: "")
         PortalConnectionResult(
             portalPath = detectedPath,
             token = handshakeToken,

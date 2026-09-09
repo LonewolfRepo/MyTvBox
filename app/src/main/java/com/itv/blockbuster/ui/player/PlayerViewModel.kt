@@ -9,6 +9,7 @@ import com.itv.blockbuster.data.player.PlaybackManager
 import com.itv.blockbuster.data.repository.LiveTvRepository
 import com.itv.blockbuster.data.repository.VodRepository
 import com.itv.blockbuster.data.repository.RecentRepository
+import com.itv.blockbuster.data.session.AdultSessionManager
 import com.itv.blockbuster.data.session.StalkerSessionManager
 import com.itv.blockbuster.domain.model.EpgProgram
 import com.itv.blockbuster.domain.model.PortalChannel
@@ -38,7 +39,8 @@ class PlayerViewModel @Inject constructor(
     private val settings: SettingsRepository,
     private val prefs: UserPreferencesRepository,
     private val sessionManager: StalkerSessionManager,
-    private val recentRepository: RecentRepository
+    private val recentRepository: RecentRepository,
+    private val adultSessionManager: AdultSessionManager // NEW
 ) : ViewModel() {
 
     val autoPlayNext: StateFlow<Boolean> = prefs.autoPlayNextFlow
@@ -87,9 +89,11 @@ class PlayerViewModel @Inject constructor(
             playbackManager.epgPrograms = epg
             _liveBanner.value = LiveBannerData(channel, epg.firstOrNull(), epg.getOrNull(1))
 
-            val profileId = prefs.activeProfileIdFlow.first()
-            val serverId = sessionManager.activePortal.value?.serverId ?: 0
-            liveTvRepository.addRecent(profileId, serverId, channel)
+            if (!adultSessionManager.isAdultMode.value) {
+                val profileId = prefs.activeProfileIdFlow.first()
+                val serverId = sessionManager.activePortal.value?.serverId ?: 0
+                liveTvRepository.addRecent(profileId, serverId, channel)
+            }
         }
     }
 
@@ -103,9 +107,12 @@ class PlayerViewModel @Inject constructor(
             playbackManager.epgPrograms = epg
             _liveBanner.value = LiveBannerData(next, epg.firstOrNull(), epg.getOrNull(1))
             playbackManager.play(url)
-            val profileId = prefs.activeProfileIdFlow.first()
-            val serverId = sessionManager.activePortal.value?.serverId ?: 0
-            liveTvRepository.addRecent(profileId, serverId, next)
+
+            if (!adultSessionManager.isAdultMode.value) {
+                val profileId = prefs.activeProfileIdFlow.first()
+                val serverId = sessionManager.activePortal.value?.serverId ?: 0
+                liveTvRepository.addRecent(profileId, serverId, next)
+            }
         }
     }
 
@@ -118,6 +125,8 @@ class PlayerViewModel @Inject constructor(
 
     fun saveCurrentProgress() {
         viewModelScope.launch {
+            if (adultSessionManager.isAdultMode.value) return@launch
+
             val player = playbackManager.player
             val videoId = playbackManager.currentVideoId
             if (videoId.isEmpty() || player.duration <= 0) return@launch

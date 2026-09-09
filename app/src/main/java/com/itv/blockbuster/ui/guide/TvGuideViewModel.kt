@@ -8,6 +8,7 @@ import com.itv.blockbuster.data.repository.ConnectionRepository
 import com.itv.blockbuster.data.repository.LiveTvRepository
 import com.itv.blockbuster.data.repository.RecentRepository
 import com.itv.blockbuster.data.repository.ServerRepository
+import com.itv.blockbuster.data.session.AdultSessionManager
 import com.itv.blockbuster.data.session.StalkerSessionManager
 import com.itv.blockbuster.domain.model.EpgProgram
 import com.itv.blockbuster.domain.model.PortalCategory
@@ -51,7 +52,8 @@ class TvGuideViewModel @Inject constructor(
     private val serverRepository: ServerRepository,         // NEW
     private val prefs: UserPreferencesRepository,
     private val sessionManager: StalkerSessionManager,
-    val playbackManager: PlaybackManager
+    val playbackManager: PlaybackManager,
+    private val adultSessionManager: AdultSessionManager // NEW
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(GuideUiState())
@@ -110,7 +112,11 @@ class TvGuideViewModel @Inject constructor(
 
         // Identify and filter out censored categories (censored == 1)
         val censoredCategoryIds = allCats.filter { it.isCensored }.map { it.id }.toSet()
-        val cats = allCats.filter { !it.isCensored }
+        //val cats = allCats.filter { !it.isCensored }
+
+        // NEW: Invert category filter for Adult mode
+        val isAdult = adultSessionManager.isAdultMode.value
+        val cats = allCats.filter { it.isCensored == isAdult }
 
         // Filter out channels belonging to censored categories
         val allChannels = liveTvRepository.getAllChannels().getOrDefault(PortalPage(emptyList(), 0)).items
