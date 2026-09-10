@@ -25,7 +25,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -35,6 +34,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -50,7 +50,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.runtime.collectAsState
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -75,7 +74,7 @@ private val RailSections = listOf(
     AppSection.TV_GUIDE,
     AppSection.MY_LIST,
     AppSection.RECENT,
-    AppSection.ADULT // NEW
+    AppSection.ADULT
 )
 
 private val MenuSections = listOf(
@@ -100,12 +99,11 @@ fun AppShell(
     val showAdult by shellViewModel.displayAdultContent.collectAsState()
 
     val formFactor = rememberFormFactor()
-    val currentRoute =
-        navController.currentBackStackEntryAsState().value?.destination?.route
+    val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route
 
     when (formFactor) {
-        FormFactor.MOBILE_PORTRAIT -> PortraitShell(navController, currentRoute, content, showAdult)
-        else -> RailShell(navController, currentRoute, content, showAdult)
+        FormFactor.MOBILE_PORTRAIT -> PortraitShell(navController, currentRoute, content, showAdult, shellViewModel)
+        else -> RailShell(navController, currentRoute, content, showAdult, shellViewModel)
     }
 }
 
@@ -118,7 +116,8 @@ private fun RailShell(
     navController: NavHostController,
     currentRoute: String?,
     content: @Composable () -> Unit,
-    showAdult: Boolean
+    showAdult: Boolean,
+    shellViewModel: AppShellViewModel
 ) {
     var railExpanded by remember { mutableStateOf(false) }
     val railWidth by animateDpAsState(
@@ -174,15 +173,11 @@ private fun RailShell(
                         expanded = railExpanded,
                         selected = currentRoute == section.route,
                         onClick = {
-                            // FIX: Force clear saved state for Adult route to re-trigger password prompt
-                            // and prevent backstack pollution that causes navigation freezes
+                            // FIX: Removed destructive popUpTo(inclusive=true) which corrupted the backstack.
+                            // Now uses standard navigation and triggers a reset signal for the password dialog.
+                            navController.navigateToSection(section.route)
                             if (section == AppSection.ADULT) {
-                                navController.navigate(Routes.ADULT) {
-                                    popUpTo(Routes.ADULT) { inclusive = true }
-                                    launchSingleTop = true
-                                }
-                            } else {
-                                navController.navigateToSection(section.route)
+                                shellViewModel.adultSessionManager.triggerUnlockPrompt()
                             }
                         }
                     )
@@ -266,7 +261,9 @@ private fun RailItem(
 private fun PortraitShell(
     navController: NavHostController,
     currentRoute: String?,
-    content: @Composable () -> Unit, showAdult: Boolean
+    content: @Composable () -> Unit,
+    showAdult: Boolean,
+    shellViewModel: AppShellViewModel
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     val currentLabel = when (currentRoute) {
@@ -319,14 +316,16 @@ private fun PortraitShell(
             content()
             if (menuOpen) {
                 OverlayMenu(
-                    navController = navController,
                     currentRoute = currentRoute,
                     onSelect = { route ->
                         menuOpen = false
                         navController.navigateToSection(route)
+                        if (route == Routes.ADULT) {
+                            shellViewModel.adultSessionManager.triggerUnlockPrompt()
+                        }
                     },
                     onClose = { menuOpen = false },
-                    showAdult = showAdult // NEW
+                    showAdult = showAdult
                 )
             }
         }
@@ -362,7 +361,7 @@ private fun PortraitShell(
             NavigationBarItem(
                 selected = currentRoute == Routes.PROFILE_HUB,
                 onClick = { navController.navigateToSection(Routes.PROFILE_HUB) },
-                icon = { Icon(Icons.Default.AccountCircle, "Profile") }, // FIX: Distinct profile icon
+                icon = { Icon(Icons.Default.AccountCircle, "Profile") },
                 label = { Text("Profile", fontSize = 11.sp) },
                 colors = NavigationBarItemDefaults.colors(
                     selectedIconColor = BbAccent,
@@ -378,7 +377,6 @@ private fun PortraitShell(
 
 @Composable
 private fun OverlayMenu(
-    navController: NavHostController,
     currentRoute: String?,
     onSelect: (String) -> Unit,
     onClose: () -> Unit,
@@ -405,18 +403,7 @@ private fun OverlayMenu(
                 textAlign = TextAlign.Center,
                 modifier = Modifier
                     .clip(RoundedCornerShape(12.dp))
-                    .clickable {
-                        // FIX: Force clear saved state for Adult route
-                        if (section == AppSection.ADULT) {
-                            onClose()
-                            navController.navigate(Routes.ADULT) {
-                                popUpTo(Routes.ADULT) { inclusive = true }
-                                launchSingleTop = true
-                            }
-                        } else {
-                            onSelect(section.route)
-                        }
-                    }
+                    .clickable { onSelect(section.route) }
                     .padding(horizontal = 32.dp, vertical = 14.dp)
             )
         }

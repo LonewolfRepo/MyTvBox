@@ -46,7 +46,7 @@ class LiveTvViewModel @Inject constructor(
     private val prefs: UserPreferencesRepository,
     private val sessionManager: StalkerSessionManager,
     val playbackManager: PlaybackManager,
-    private val adultSessionManager: AdultSessionManager // NEW
+    private val adultSessionManager: AdultSessionManager
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(LiveTvUiState())
@@ -56,8 +56,6 @@ class LiveTvViewModel @Inject constructor(
     val favoriteIds: StateFlow<Set<String>> = _favoriteIds.asStateFlow()
 
     init {
-
-
         viewModelScope.launch {
             combine(prefs.activeProfileIdFlow, sessionManager.activePortal) { p, sp ->
                 Pair(p, sp?.serverId ?: 0)
@@ -98,32 +96,27 @@ class LiveTvViewModel @Inject constructor(
     private suspend fun load() {
         _uiState.update { it.copy(isLoading = true) }
         val allCats = liveTvRepository.getCategories().getOrDefault(emptyList())
-        val isAdult = adultSessionManager.isAdultMode.value
 
-        // FIX: Identify and filter out censored categories (censored == 1)
+        // FIX: Push censored category IDs to global registry
         val censoredCategoryIds = allCats.filter { it.isCensored }.map { it.id }.toSet()
-        val baseCats = allCats.filter { it.isCensored == isAdult }
+        adultSessionManager.updateCensoredCategories(censoredCategoryIds)
 
+        val isAdult = adultSessionManager.isAdultMode.value
+        val cats = allCats.filter { it.isCensored == isAdult }
         val allRaw = liveTvRepository.getAllChannels().getOrDefault(PortalPage(emptyList(), 0)).items
         val all = allRaw.filter {
             if (isAdult) it.genreId in censoredCategoryIds
             else it.genreId !in censoredCategoryIds
         }
-
-
         val p = prefs.activeProfileIdFlow.first()
         val s = sessionManager.activePortal.value?.serverId ?: 0
         val rawOrder = settings.getString(p, s, "order_live", "")
-
-        val orderedVisible = if (isAdult) {
-            baseCats.filter { it.id != "*" && it.id != "0" && it.id != "all" }
-        } else {
-            CategorySortHelper.applyToCategories(baseCats, rawOrder).filter { it.id != "*" && it.id != "0" && it.id != "all" }
-        }
-
+        val ordered = CategorySortHelper.applyToCategories(cats, rawOrder)
+        val orderedIds = ordered.map { it.id }.toSet()
+        val missingCats = cats.filter { it.id !in orderedIds && it.id != "*" && it.id != "0" && it.id != "all" }
+        val finalCats = ordered + missingCats
         val allCat = PortalCategory(id = "*", title = "All Categories", alias = "all", isCensored = isAdult)
-        val categoriesWithAll = listOf(allCat) + orderedVisible
-
+        val categoriesWithAll = listOf(allCat) + finalCats
         _uiState.update {
             it.copy(
                 isLoading = false,

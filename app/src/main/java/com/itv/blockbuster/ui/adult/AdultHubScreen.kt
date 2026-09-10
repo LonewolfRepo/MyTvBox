@@ -24,6 +24,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -51,10 +52,29 @@ fun AdultHubScreen(
     onNavigateToVod: () -> Unit,
     viewModel: AdultHubViewModel = hiltViewModel()
 ) {
-    val isUnlocked by viewModel.isUnlocked.collectAsState()
+    // FIX: Observe global unlock state
+    val isUnlocked by viewModel.adultSessionManager.isUnlocked.collectAsState()
     val passwordError by viewModel.passwordError.collectAsState()
+    val requestUnlock by viewModel.adultSessionManager.requestUnlock.collectAsState()
+
     var showPasswordDialog by remember { mutableStateOf(!isUnlocked) }
     var passwordInput by remember { mutableStateOf("") }
+
+    LaunchedEffect(requestUnlock) {
+        if (requestUnlock > 0) {
+            showPasswordDialog = true
+            passwordInput = ""
+            viewModel.resetError()
+        }
+    }
+
+    // FIX: If locked externally (by navigating to Home/Movies), force dialog to show
+    LaunchedEffect(isUnlocked) {
+        if (!isUnlocked) {
+            showPasswordDialog = true
+            passwordInput = ""
+        }
+    }
 
     if (showPasswordDialog && !isUnlocked) {
         AlertDialog(

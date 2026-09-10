@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
@@ -18,6 +19,7 @@ import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import androidx.compose.runtime.LaunchedEffect
@@ -58,14 +60,12 @@ object Routes {
     val TV_GUIDE = AppSection.TV_GUIDE.route
     val MY_LIST = AppSection.MY_LIST.route
     val RECENT = AppSection.RECENT.route
-
     val ADULT = AppSection.ADULT.route
     val SETTINGS = AppSection.SETTINGS.route
     const val VOD_BROWSER = "vod_browser/{contentType}"
     const val VOD_DETAIL = "vod_detail/{itemId}/{contentType}"
     const val PLAYER = "player/{streamUrl}/{channelId}/{videoId}"
     const val CATCHUP = "catchup/{channelId}"
-
     const val ADULT_LIVE_TV = "adult_live_tv"
     const val ADULT_VOD_BROWSER = "adult_vod_browser"
 }
@@ -107,7 +107,6 @@ fun AppRoot() {
             ) { CircularProgressIndicator(color = BbAccent) }
         }
         is StartupViewModel.StartupState.Resolved -> {
-            // MERGE: hand the resolved landing route into the graph
             AppNavigation(startAtPicker = current.showPicker, landingRoute = current.landingRoute)
         }
     }
@@ -124,18 +123,24 @@ fun AppNavigation(
     val shellViewModel: AppShellViewModel = hiltViewModel()
     val adultSessionManager = shellViewModel.adultSessionManager
 
-    // NEW: Observe route to toggle Adult Mode globally
     val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route
+
+    // FIX: Safely destroy adult session when navigating to ANY non-adult route
     LaunchedEffect(currentRoute) {
         val isAdultRoute = currentRoute?.startsWith("adult") == true || currentRoute == Routes.ADULT
-        if (isAdultRoute) adultSessionManager.enterAdultMode()
-        else adultSessionManager.exitAdultMode()
+        if (isAdultRoute) {
+            adultSessionManager.enterAdultMode()
+        } else {
+            adultSessionManager.lock()
+        }
     }
+
     NavHost(
         navController = navController,
         // CHANGE 2: when the picker is skipped, open the configured section directly
         startDestination = if (startAtPicker) Routes.PROFILE_PICKER else landingRoute
     ) {
+        // ... (Keep all existing composable routes exactly as they are) ...
         composable(Routes.PROFILE_PICKER) {
             ProfilePickerScreen(
                 onProfileSelected = {
@@ -223,7 +228,6 @@ fun AppNavigation(
                 )
             }
         }
-
         composable(Routes.ADULT) {
             AppShell(navController) {
                 AdultHubScreen(
@@ -232,7 +236,6 @@ fun AppNavigation(
                 )
             }
         }
-
         composable(Routes.ADULT_LIVE_TV) {
             AppShell(navController) {
                 LiveTvScreen(
@@ -311,7 +314,6 @@ fun AppNavigation(
                 )
             }
         }
-
         composable(
             route = Routes.VOD_DETAIL,
             arguments = listOf(

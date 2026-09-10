@@ -49,7 +49,7 @@ class VodDetailViewModel @Inject constructor(
     private val sessionManager: StalkerSessionManager,
     private val prefs: UserPreferencesRepository,
     private val playbackManager: PlaybackManager,
-    private val adultSessionManager: AdultSessionManager,
+    private val adultSessionManager: AdultSessionManager, // NEW
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
     private val contentType: String = savedStateHandle.get<String>("contentType") ?: "vod"
@@ -388,8 +388,9 @@ class VodDetailViewModel @Inject constructor(
                 playbackManager.pendingSeekMs =
                     if (resume) resolveResumePosition(fileId) else seekMs
 
-                // FIX: Block recents in adult mode
-                if (!adultSessionManager.isAdultMode.value) {
+                // FIX: Dual-layer check (Item + Category)
+                val isAdultContent = item.isCensored || adultSessionManager.isCategoryCensored(item.categoryId)
+                if (!isAdultContent) {
                     val profileId = prefs.activeProfileIdFlow.first()
                     val serverId = sessionManager.activePortal.value?.serverId ?: 0
                     vodRepository.addRecent(profileId, serverId, item, "SERIES")
@@ -443,8 +444,9 @@ class VodDetailViewModel @Inject constructor(
                 playbackManager.episodeQueue = emptyList()
                 playbackManager.pendingSeekMs = resolveResumePosition(fileId)
 
-                // FIX: Block recents in adult mode
-                if (!adultSessionManager.isAdultMode.value) {
+                // FIX: Dual-layer check (Item + Category)
+                val isAdultContent = item.isCensored || adultSessionManager.isCategoryCensored(item.categoryId)
+                if (!isAdultContent) {
                     val profileId = prefs.activeProfileIdFlow.first()
                     val serverId = sessionManager.activePortal.value?.serverId ?: 0
                     vodRepository.addRecent(profileId, serverId, item, "VOD")
@@ -513,7 +515,6 @@ class VodDetailViewModel @Inject constructor(
     }
 
     fun toggleFavorite() {
-        if (adultSessionManager.isAdultMode.value) return
         val item = _state.value.item ?: return
         viewModelScope.launch {
             val profileId = prefs.activeProfileIdFlow.first()

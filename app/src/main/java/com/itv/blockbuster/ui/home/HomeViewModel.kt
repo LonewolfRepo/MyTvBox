@@ -97,10 +97,7 @@ class HomeViewModel @Inject constructor(
      */
     // FIX: In Adult mode, trust the category filter and don't drop items
     // just because the portal forgot to set the censored flag on them.
-    private fun List<PortalVodItem>.visible(): List<PortalVodItem> {
-        val isAdult = adultSessionManager.isAdultMode.value
-        return if (isAdult) this else filter { !it.isCensored }
-    }
+    private fun List<PortalVodItem>.visible(): List<PortalVodItem> = filter { !it.isCensored }
 
     init {
         viewModelScope.launch {
@@ -147,7 +144,6 @@ class HomeViewModel @Inject constructor(
     }
 
     fun toggleFavorite(item: PortalVodItem) {
-        if (adultSessionManager.isAdultMode.value) return
         viewModelScope.launch {
             val p = prefs.activeProfileIdFlow.firstOrNull() ?: return@launch
             val s = sessionManager.activePortal.value?.serverId ?: 0
@@ -202,8 +198,6 @@ class HomeViewModel @Inject constructor(
         // Read the Home category order/visibility setting and remember its signature
         val rawOrder = settings.getString(p, s, "order_home", "")
         lastAppliedHomeOrder = rawOrder
-
-        val isAdult = adultSessionManager.isAdultMode.value
         val categories = portalService.fetchVodCategories().getOrDefault(emptyList())
         val genres = portalService.fetchVodGenres().getOrDefault(emptyList())
 
@@ -211,30 +205,22 @@ class HomeViewModel @Inject constructor(
         //  - only categories marked visible are kept
         //  - kept categories stay in the exact configured order
         // NEW: Invert filter for Adult mode
+        // FIX: Push censored category IDs to global registry
+        val censoredIds = categories.filter { it.isCensored }.map { it.id }.toSet()
+        adultSessionManager.updateCensoredCategories(censoredIds)
 
-        val baseCategories = if (isAdult) categories.filter { it.isCensored } else categories.filter { !it.isCensored }
-        val baseGenres = if (isAdult) genres.filter { it.isCensored } else genres.filter { !it.isCensored }
-
-
-        val orderedVisible = if (isAdult) {
-            // Bypass settings for Adult mode, show all censored categories
-            baseCategories.filter { it.id != "*" && it.id != "0" }
-        } else {
-            CategorySortHelper.applyToCategories(baseCategories, rawOrder)
-                .filter { it.id != "*" && it.id != "0" }
-        }
-
+        val uncensoredCategories = categories.filter { !it.isCensored }
+        val uncensoredGenres = genres.filter { !it.isCensored }
+        val orderedVisible = CategorySortHelper.applyToCategories(uncensoredCategories, rawOrder)
+            .filter { it.id != "*" && it.id != "0" }
         _allCategories.value = orderedVisible
         val initialBatch = orderedVisible.take(5)
         _visibleCategories.value = initialBatch
         _hasMoreCategories.value = orderedVisible.size > 5
-
-        val allCat = PortalCategory(id = "*", title = "All Categories", alias = "all", isCensored = isAdult)
+        val allCat = PortalCategory(id = "*", title = "All Categories", alias = "all", isCensored = false)
         val categoriesWithAll = listOf(allCat) + orderedVisible
-
-        val allGenre = PortalCategory(id = "*", title = "All Genres", alias = "all", isCensored = isAdult)
-        val genresWithAll = listOf(allGenre) + baseGenres
-
+        val allGenre = PortalCategory(id = "*", title = "All Genres", alias = "all", isCensored = false)
+        val genresWithAll = listOf(allGenre) + uncensoredGenres
         _uiState.update {
             it.copy(
                 categories = categoriesWithAll,
@@ -244,7 +230,6 @@ class HomeViewModel @Inject constructor(
                 searchQuery = ""
             )
         }
-
         loadDefaultHomeRows()
     }
 
@@ -318,9 +303,8 @@ class HomeViewModel @Inject constructor(
         val categoryId = _uiState.value.selectedCategory?.id ?: "*"
         val page = portalService.fetchVodSearch(query, categoryId, 1, genreId)
             .getOrDefault(PortalPage(emptyList(), 0))
-
         val visibleItems = page.items.visible()
-        val rows = if (visibleItems.isNotEmpty()) {
+        val rows = if (page.items.isNotEmpty()) {
             listOf(
                 HomeRow(
                     id = "search",
@@ -340,17 +324,9 @@ class HomeViewModel @Inject constructor(
     private suspend fun loadDefaultHomeRows() {
         _uiState.update { it.copy(isLoading = true) }
         val genreId = _uiState.value.selectedGenre?.id ?: ""
-        val isAdult = adultSessionManager.isAdultMode.value
-        // Disable Recents in Adult VOD
-        val recentPage = if (isAdult) {
-            PortalPage(emptyList(), 0)
-        } else {
-            portalService.fetchVodList(categoryId = "*", page = 1, pageSize = 15, genreId = genreId)
-                .getOrDefault(PortalPage(emptyList(), 0))
-        }
-
+        val recentPage = portalService.fetchVodList(categoryId = "*", page = 1, pageSize = 15, genreId = genreId)
+            .getOrDefault(PortalPage(emptyList(), 0))
         val visibleRecent = recentPage.items.visible()
-
         val categoryRows = coroutineScope {
             _visibleCategories.value.map { category ->
                 async(Dispatchers.IO) {
@@ -366,7 +342,6 @@ class HomeViewModel @Inject constructor(
                 }
             }.awaitAll().filter { it.items.isNotEmpty() }
         }
-
         val allRows = buildList {
             //if (recentPage.items.isNotEmpty()) add(HomeRow("recently_added", "Recently Added", recentPage.items, hasMore = false))
             // FIX: "Recently Added" is no longer capped. It now carries real pagination
@@ -473,7 +448,6 @@ class HomeViewModel @Inject constructor(
                 portalService.fetchVodList(rowId, nextPage, 14, genreId)
                     .getOrDefault(PortalPage(emptyList(), 0))
             }
-
             _uiState.update { state ->
                 state.copy(rows = state.rows.map {
                     if (it.id == rowId) {

@@ -72,7 +72,6 @@ class VodBrowserViewModel @Inject constructor(
     private val _visibleCategories = MutableStateFlow<List<PortalCategory>>(emptyList())
     private val _hasMoreCategories = MutableStateFlow(true)
     private val _isLoadingMoreCategories = MutableStateFlow(false)
-
     val hasMoreCategories: StateFlow<Boolean> = _hasMoreCategories.asStateFlow()
 
     private var isInitialized = false
@@ -85,8 +84,7 @@ class VodBrowserViewModel @Inject constructor(
      * level, instead of in VodRepository. The repository stays raw so a dedicated
      * Censored page can reuse the same data later.
      */
-
-    private fun List<PortalVodItem>.visible(): List<PortalVodItem> = filter { it.isCensored == adultSessionManager.isAdultMode.value }
+    private fun List<PortalVodItem>.visible(): List<PortalVodItem> = filter { !it.isCensored }
 
     fun initialize(type: String) {
         if (isInitialized && _contentType == type) return
@@ -130,7 +128,6 @@ class VodBrowserViewModel @Inject constructor(
     }
 
     fun toggleFavorite(item: PortalVodItem) {
-        if (adultSessionManager.isAdultMode.value) return
         viewModelScope.launch {
             val p = prefs.activeProfileIdFlow.first()
             val s = sessionManager.activePortal.value?.serverId ?: 0
@@ -146,44 +143,37 @@ class VodBrowserViewModel @Inject constructor(
             val masterCats = vodRepository.getCategories().getOrDefault(emptyList())
             val masterGenres = vodRepository.getGenres().getOrDefault(emptyList())
 
-            val baseCats = if (isAdult) masterCats.filter { it.isCensored } else masterCats.filter { !it.isCensored }
-            val baseGenres = if (isAdult) masterGenres.filter { it.isCensored } else masterGenres.filter { !it.isCensored }
+            // FIX: Push censored category IDs to global registry
+            val censoredIds = masterCats.filter { it.isCensored }.map { it.id }.toSet()
+            adultSessionManager.updateCensoredCategories(censoredIds)
 
             val orderKey = if (_contentType == "series") "order_series" else "order_vod"
             val rawOrder = settings.getString(profileId, serverId, orderKey, "")
-
-            val orderedVisible = if (isAdult) {
-                // Bypass settings for Adult mode, show all censored categories
-                baseCats.filter { it.id != "*" && it.id != "0" }
-            } else {
-                CategorySortHelper.applyToCategories(baseCats, rawOrder).filter { it.id != "*" && it.id != "0" }
-            }
-
-            _allCategories.value = orderedVisible
-            val initialBatch = orderedVisible.take(5)
+            val ordered = CategorySortHelper.applyToCategories(masterCats, rawOrder)
+            val filteredOrdered = ordered.filter { it.id != "*" && it.id != "0" }
+            val uncensoredGenres = masterGenres.filter { !it.isCensored }
+            _allCategories.value = filteredOrdered
+            val initialBatch = filteredOrdered.take(5)
             _visibleCategories.value = initialBatch
-            _hasMoreCategories.value = orderedVisible.size > 5
-
-            val allCat = PortalCategory(id = "*", title = "All Categories", alias = "all", isCensored = isAdult)
-            val categoriesWithAll = listOf(allCat) + orderedVisible
-
-            val allGenre = PortalCategory(id = "*", title = "All Genres", alias = "all", isCensored = isAdult)
-            val genresWithAll = listOf(allGenre) + baseGenres
-
+            _hasMoreCategories.value = filteredOrdered.size > 5
+            val defaultCat = ordered.firstOrNull { it.id == "*" || it.id == "0" } ?: ordered.firstOrNull()
+            val allGenre = PortalCategory(id = "*", title = "All Genres", alias = "all", isCensored = false)
+            val genresWithAll = listOf(allGenre) + uncensoredGenres
             _state.update {
                 it.copy(
-                    categories = categoriesWithAll,
-                    selectedCategory = allCat,
+                    categories = ordered,
+                    selectedCategory = defaultCat,
                     genres = genresWithAll,
                     selectedGenre = allGenre,
                     searchQuery = ""
                 )
             }
-
-            if (allCat.id == "*" || allCat.id == "0") {
+            if (defaultCat != null && (defaultCat.id == "*" || defaultCat.id == "0")) {
                 loadInitialRows(initialBatch)
+            } else if (defaultCat != null) {
+                loadContent(defaultCat)
             } else {
-                loadContent(allCat)
+                _state.update { it.copy(isLoading = false) }
             }
         } catch (e: Exception) {
             _state.update { it.copy(isLoading = false) }
@@ -273,10 +263,8 @@ class VodBrowserViewModel @Inject constructor(
                 }
                 return
             }
-
             val isAllCategories = category.id == "*" || category.id == "0"
             _hasMoreCategories.value = isAllCategories
-
             val catsToLoad = if (isAllCategories) {
                 _visibleCategories.value
             } else {
@@ -309,11 +297,9 @@ class VodBrowserViewModel @Inject constructor(
         if (selectedCat == null || (selectedCat.id != "*" && selectedCat.id != "0")) return
         // NEW: never vertically paginate while a search is active
         if (_state.value.searchQuery.isNotBlank()) return
-
         viewModelScope.launch {
             _isLoadingMoreCategories.value = true
             val genreId = _state.value.selectedGenre?.id ?: ""
-
             while (_hasMoreCategories.value) {
                 val currentSize = _visibleCategories.value.size
                 val nextBatch = _allCategories.value.drop(currentSize).take(5)
@@ -344,12 +330,10 @@ class VodBrowserViewModel @Inject constructor(
     fun loadMoreRowItems(rowId: String) {
         val currentRow = _state.value.rows.find { it.id == rowId } ?: return
         if (currentRow.isLoadingPage || !currentRow.hasMore) return
-
         viewModelScope.launch {
             _state.update { state ->
                 state.copy(rows = state.rows.map { if (it.id == rowId) it.copy(isLoadingPage = true) else it })
             }
-
             val nextPage = currentRow.currentPage + 1
             val genreId = _state.value.selectedGenre?.id ?: ""
 
@@ -364,7 +348,6 @@ class VodBrowserViewModel @Inject constructor(
                 vodRepository.getList(_contentType, rowId, nextPage, 14, genreId)
                     .getOrDefault(PortalPage(emptyList(), 0))
             }
-
             _state.update { state ->
                 state.copy(rows = state.rows.map {
                     if (it.id == rowId) {

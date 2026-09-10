@@ -1,6 +1,7 @@
 package com.itv.blockbuster.ui.adult
 
 import androidx.lifecycle.ViewModel
+import com.itv.blockbuster.data.session.AdultSessionManager
 import com.itv.blockbuster.data.session.StalkerSessionManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -10,10 +11,9 @@ import javax.inject.Inject
 
 @HiltViewModel
 class AdultHubViewModel @Inject constructor(
-    private val sessionManager: StalkerSessionManager
+    private val sessionManager: StalkerSessionManager,
+    val adultSessionManager: AdultSessionManager
 ) : ViewModel() {
-    private val _isUnlocked = MutableStateFlow(false)
-    val isUnlocked: StateFlow<Boolean> = _isUnlocked.asStateFlow()
 
     private val _passwordError = MutableStateFlow<String?>(null)
     val passwordError: StateFlow<String?> = _passwordError.asStateFlow()
@@ -22,10 +22,14 @@ class AdultHubViewModel @Inject constructor(
         val correctPassword = sessionManager.parentPassword.value
         val expected = if (correctPassword.isBlank()) "0000" else correctPassword
         if (enteredPassword == expected) {
-            _isUnlocked.value = true
+            adultSessionManager.unlock() // Uses global state now
             _passwordError.value = null
         } else {
             _passwordError.value = "Incorrect password"
         }
+    }
+
+    fun resetError() {
+        _passwordError.value = null
     }
 }

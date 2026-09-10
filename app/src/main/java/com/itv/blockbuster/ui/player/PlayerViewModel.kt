@@ -89,7 +89,9 @@ class PlayerViewModel @Inject constructor(
             playbackManager.epgPrograms = epg
             _liveBanner.value = LiveBannerData(channel, epg.firstOrNull(), epg.getOrNull(1))
 
-            if (!adultSessionManager.isAdultMode.value) {
+            // FIX: Dual-layer check (Item + Category)
+            val isAdultContent = channel.isCensored || adultSessionManager.isCategoryCensored(channel.genreId)
+            if (!isAdultContent) {
                 val profileId = prefs.activeProfileIdFlow.first()
                 val serverId = sessionManager.activePortal.value?.serverId ?: 0
                 liveTvRepository.addRecent(profileId, serverId, channel)
@@ -108,7 +110,9 @@ class PlayerViewModel @Inject constructor(
             _liveBanner.value = LiveBannerData(next, epg.firstOrNull(), epg.getOrNull(1))
             playbackManager.play(url)
 
-            if (!adultSessionManager.isAdultMode.value) {
+            // FIX: Dual-layer check (Item + Category)
+            val isAdultContent = next.isCensored || adultSessionManager.isCategoryCensored(next.genreId)
+            if (!isAdultContent) {
                 val profileId = prefs.activeProfileIdFlow.first()
                 val serverId = sessionManager.activePortal.value?.serverId ?: 0
                 liveTvRepository.addRecent(profileId, serverId, next)
@@ -125,8 +129,6 @@ class PlayerViewModel @Inject constructor(
 
     fun saveCurrentProgress() {
         viewModelScope.launch {
-            if (adultSessionManager.isAdultMode.value) return@launch
-
             val player = playbackManager.player
             val videoId = playbackManager.currentVideoId
             if (videoId.isEmpty() || player.duration <= 0) return@launch
@@ -134,6 +136,9 @@ class PlayerViewModel @Inject constructor(
             // This also protects the saved resume position from being
             // overwritten with ~0 right after a seek is requested.
             if (player.currentPosition < 10_000) return@launch
+
+            // Note: Progress saving is generally acceptable for adult content to resume playback,
+            // but if you want to block it entirely, add: if (playbackManager.currentIsCensored) return@launch
             vodRepository.saveProgress(
                 profileId = profileId(),
                 serverId = serverId(),
