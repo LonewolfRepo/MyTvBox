@@ -109,20 +109,29 @@ private fun encodeUrl(url: String): String =
  *
  * This composable re-checks the global unlock state on every (re)composition of an
  * Adult sub-screen. If the session isn't unlocked - whether because it was never
- * unlocked this visit, or because it got locked by navigating away - it immediately
- * redirects back to the Adult hub, where the password dialog is shown, instead of
- * rendering the protected content.
+ * unlocked this visit, or because it got locked by navigating away - it redirects
+ * back to the Adult hub, where the password dialog is shown, instead of rendering
+ * the protected content.
+ *
+ * FIX: the redirect only fires if THIS route is still the current destination at
+ * the moment the effect runs. Without that check, locking (e.g. tapping "Home"
+ * while sitting on Adult VOD) also flips isUnlocked to false while this gate is
+ * still composed (Navigation Compose doesn't dispose the outgoing screen
+ * instantly), so its LaunchedEffect would fire a competing navigate(Routes.ADULT)
+ * call that raced the real navigation to Home and sometimes won - leaving the app
+ * stuck bouncing back to the Adult hub instead of actually going Home.
  */
 @Composable
 private fun AdultGate(
     navController: NavHostController,
     adultSessionManager: AdultSessionManager,
+    route: String,
     content: @Composable () -> Unit
 ) {
     val isUnlocked by adultSessionManager.isUnlocked.collectAsState()
 
     LaunchedEffect(isUnlocked) {
-        if (!isUnlocked) {
+        if (!isUnlocked && navController.currentDestination?.route == route) {
             navController.navigate(Routes.ADULT) {
                 popUpTo(Routes.ADULT) { inclusive = true }
                 launchSingleTop = true
@@ -295,7 +304,7 @@ fun AppNavigation(
                 // (skipping AdultHubScreen entirely). This gate re-checks the unlock
                 // state every time this destination is (re)composed and bounces back
                 // to the password screen if it isn't unlocked.
-                AdultGate(navController, adultSessionManager) {
+                AdultGate(navController, adultSessionManager, Routes.ADULT_LIVE_TV) {
                     LiveTvScreen(
                         onPlayChannel = { url, channelId -> navController.navigate("player/${encodeUrl(url)}/$channelId/none") },
                         onOpenCatchup = { channelId -> navController.navigate("catchup/$channelId") }
@@ -308,7 +317,7 @@ fun AppNavigation(
         composable(Routes.ADULT_VOD_BROWSER) {
             AppShell(navController) {
                 // FIX: same unlock gate as Adult Live TV above - see comment there.
-                AdultGate(navController, adultSessionManager) {
+                AdultGate(navController, adultSessionManager, Routes.ADULT_VOD_BROWSER) {
                     HomeScreen(
                         onOpenPortals = { navController.navigateToSection(Routes.SERVERS) },
                         onOpenVodDetail = { itemId, type -> navController.navigate("vod_detail/$itemId/$type") }

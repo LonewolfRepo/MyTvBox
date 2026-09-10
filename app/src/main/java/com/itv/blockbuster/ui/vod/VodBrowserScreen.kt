@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.itv.blockbuster.domain.model.PortalCategory
 import com.itv.blockbuster.ui.components.CarouselRow
+import com.itv.blockbuster.ui.components.PosterGrid
 import com.itv.blockbuster.ui.navigation.FormFactor
 import com.itv.blockbuster.ui.navigation.rememberFormFactor
 import com.itv.blockbuster.ui.theme.BbAccent
@@ -170,44 +171,70 @@ fun VodBrowserScreen(
                     }
                 }
 
-                LazyColumn(modifier = Modifier.fillMaxSize()) {
-                    items(state.rows, key = { it.id }) { row ->
-                        CarouselRow(
-                            row = row,
-                            progressMap = progressMap,
+                // NEW: A specific category switches to a scrollable poster grid instead
+                // of the carousel rows - see HomeScreen for the same pattern/rationale.
+                val isAllCategories = state.selectedCategory?.id == "*" || state.selectedCategory?.id == "0"
+
+                if (isAllCategories) {
+                    LazyColumn(modifier = Modifier.fillMaxSize()) {
+                        items(state.rows, key = { it.id }) { row ->
+                            CarouselRow(
+                                row = row,
+                                progressMap = progressMap,
+                                favoriteIds = favoriteIds,
+                                onItemClick = { item ->
+                                    VodNavigationCache.currentItem = item
+                                    onOpenDetail(item.id)
+                                },
+                                onFavoriteIconClick = { item ->
+                                    viewModel.toggleFavorite(item)
+                                },
+                                onLoadMore = { viewModel.loadMoreRowItems(row.id) }
+                            )
+                        }
+
+                        // Vertical Pagination Trigger
+                        if (hasMoreCategories) {
+                            item {
+                                // FIX: re-fire whenever the row set or filters change while
+                                // the spinner is visible, so pagination never stalls after
+                                // a genre selection or an empty category batch.
+                                LaunchedEffect(state.rows.size, state.selectedCategory, state.selectedGenre) {
+                                    viewModel.loadMoreCategories()
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(16.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    CircularProgressIndicator(
+                                        color = BbAccent,
+                                        strokeWidth = 2.dp,
+                                        modifier = Modifier.size(32.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    val gridRow = state.rows.firstOrNull()
+                    if (gridRow != null && gridRow.items.isNotEmpty()) {
+                        PosterGrid(
+                            row = gridRow,
                             favoriteIds = favoriteIds,
+                            progressMap = progressMap,
                             onItemClick = { item ->
                                 VodNavigationCache.currentItem = item
                                 onOpenDetail(item.id)
                             },
-                            onFavoriteIconClick = { item ->
-                                viewModel.toggleFavorite(item)
-                            },
-                            onLoadMore = { viewModel.loadMoreRowItems(row.id) }
+                            onFavoriteIconClick = { item -> viewModel.toggleFavorite(item) },
+                            onLoadMore = { viewModel.loadMoreRowItems(gridRow.id) },
+                            modifier = Modifier.fillMaxSize()
                         )
-                    }
-
-                    // Vertical Pagination Trigger
-                    if (hasMoreCategories) {
-                        item {
-                            // FIX: re-fire whenever the row set or filters change while
-                            // the spinner is visible, so pagination never stalls after
-                            // a genre selection or an empty category batch.
-                            LaunchedEffect(state.rows.size, state.selectedCategory, state.selectedGenre) {
-                                viewModel.loadMoreCategories()
-                            }
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(16.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                CircularProgressIndicator(
-                                    color = BbAccent,
-                                    strokeWidth = 2.dp,
-                                    modifier = Modifier.size(32.dp)
-                                )
-                            }
+                    } else if (!state.isLoading) {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text(text = "No items found", color = BbTextSecondary, fontSize = 14.sp)
                         }
                     }
                 }

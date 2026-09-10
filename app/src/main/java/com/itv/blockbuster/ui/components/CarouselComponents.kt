@@ -26,6 +26,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -138,6 +142,7 @@ fun <T> NetflixStyleCarousel(
 @Composable
 fun PosterCard(
     item: PortalVodItem,
+    modifier: Modifier = Modifier.width(140.dp),
     isFavorite: Boolean = false,
     progressRatio: Float = 0f,
     onClick: () -> Unit = {},
@@ -152,9 +157,8 @@ fun PosterCard(
         label = "posterScale"
     )
     Box(
-        modifier = Modifier
+        modifier = modifier
             .graphicsLayer { scaleX = scale; scaleY = scale }
-            .width(140.dp)
             .aspectRatio(2f / 3f)
             .clip(RoundedCornerShape(10.dp))
             .background(BbCard)
@@ -333,8 +337,77 @@ fun CarouselRow(
     }
 }
 
+/**
+ * NEW: Scrollable poster grid used when a specific category is selected (as opposed
+ * to the "All Categories"/"All Genres" carousel view). One category = one flat list
+ * of items, so a vertical grid reads better than a single horizontal row here.
+ * Supports the same favorite/progress/click callbacks as CarouselRow, plus the same
+ * "load more on reaching the end" pagination pattern (a trailing full-width item that
+ * fires onLoadMore when it comes into view).
+ */
+@Composable
+fun PosterGrid(
+    row: HomeRow,
+    favoriteIds: Set<String> = emptySet(),
+    progressMap: Map<String, PlaybackProgressEntity> = emptyMap(),
+    onItemClick: (PortalVodItem) -> Unit = {},
+    onItemLongClick: (PortalVodItem) -> Unit = {},
+    onFavoriteIconClick: (PortalVodItem) -> Unit = {},
+    onLoadMore: () -> Unit = {},
+    modifier: Modifier = Modifier
+) {
+    LazyVerticalGrid(
+        columns = GridCells.Adaptive(minSize = 130.dp),
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp)
+    ) {
+        items(row.items, key = { it.id }) { item ->
+            val progress = progressMap[item.id]
+            val ratio = if (progress != null && progress.durationMs > 0) {
+                (progress.positionMs.toFloat() / progress.durationMs.toFloat()).coerceIn(0f, 1f)
+            } else 0f
+            PosterCard(
+                item = item,
+                modifier = Modifier.fillMaxWidth(),
+                isFavorite = favoriteIds.contains(item.id),
+                progressRatio = ratio,
+                onClick = { onItemClick(item) },
+                onLongClick = { onItemLongClick(item) },
+                onFavoriteIconClick = { onFavoriteIconClick(item) }
+            )
+        }
+        if (row.hasMore) {
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                // FIX: mirrors CarouselRow's trailing load-more trigger - fires once
+                // this spacer scrolls into view, keyed on item count so it re-arms
+                // after every page appended.
+                LaunchedEffect(row.items.size) { onLoadMore() }
+                Box(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (row.isLoadingPage) {
+                        CircularProgressIndicator(
+                            color = BbAccent,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 fun HeroBanner(hero: PortalVodItem?) {
+    // FIX: render nothing (not even an empty placeholder box) when there's no hero
+    // item - previously this always reserved a fixed 280/380dp block of blank
+    // space even with hero == null (e.g. Adult VOD, when the pool used to seed a
+    // hero happens to have no adult-flagged items), which read as a broken layout.
+    if (hero == null) return
     val formFactor = rememberFormFactor()
     val height = if (formFactor == FormFactor.MOBILE_PORTRAIT) 280.dp else 380.dp
     Box(
@@ -343,7 +416,7 @@ fun HeroBanner(hero: PortalVodItem?) {
             .height(height)
             .background(BbBackground)
     ) {
-        if (hero != null && hero.logoUrl.isNotEmpty()) {
+        if (hero.logoUrl.isNotEmpty()) {
             AsyncImage(
                 model = hero.logoUrl,
                 contentDescription = null,

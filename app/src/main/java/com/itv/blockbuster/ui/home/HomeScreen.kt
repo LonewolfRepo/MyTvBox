@@ -56,6 +56,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.itv.blockbuster.domain.model.PortalCategory
 import com.itv.blockbuster.ui.components.CarouselRow
 import com.itv.blockbuster.ui.components.HeroBanner
+import com.itv.blockbuster.ui.components.PosterGrid
 import com.itv.blockbuster.ui.navigation.FormFactor
 import com.itv.blockbuster.ui.navigation.rememberFormFactor
 import com.itv.blockbuster.ui.theme.BbAccent
@@ -197,16 +198,67 @@ fun HomeScreen(
                         }
                     }
 
-                    LazyColumn(modifier = Modifier.fillMaxSize()) {
-                        // Only show HeroBanner if "All Categories" is selected and no search is active
-                        val isAllCategories = state.selectedCategory?.id == "*" || state.selectedCategory?.id == "0"
-                        val isSearching = state.searchQuery.isNotBlank()
-                        if (isAllCategories && !isSearching) {
-                            item(key = "hero") { HeroBanner(hero = state.hero) }
+                    // NEW: A specific category (anything but "All Categories") switches
+                    // from the horizontal carousel rows to a scrollable poster grid,
+                    // since there's only ever one flat list of items to show at that
+                    // point - a grid reads better than a single wide row for that.
+                    val isAllCategories = state.selectedCategory?.id == "*" || state.selectedCategory?.id == "0"
+                    val isSearching = state.searchQuery.isNotBlank()
+
+                    if (isAllCategories) {
+                        LazyColumn(modifier = Modifier.fillMaxSize()) {
+                            // Only show HeroBanner if "All Categories" is selected, no search
+                            // is active, AND there's actually a hero item to show - otherwise
+                            // (e.g. Adult VOD when the "Recently Added" page has no adult-
+                            // flagged items to seed a hero from) skip the item entirely so it
+                            // doesn't reserve empty space for a banner that never renders.
+                            if (!isSearching && state.hero != null) {
+                                item(key = "hero") { HeroBanner(hero = state.hero) }
+                            }
+                            items(state.rows, key = { it.id }) { row ->
+                                CarouselRow(
+                                    row = row,
+                                    favoriteIds = favoriteIds,
+                                    progressMap = progressMap,
+                                    onItemClick = { item ->
+                                        VodNavigationCache.currentItem = item
+                                        onOpenVodDetail(item.id, if (item.isSeries) "series" else "vod")
+                                    },
+                                    onItemLongClick = { item -> viewModel.toggleFavorite(item) },
+                                    onFavoriteIconClick = { item -> viewModel.toggleFavorite(item) },
+                                    onLoadMore = { viewModel.loadMoreRowItems(row.id) }
+                                )
+                            }
+                            // Vertical Pagination Trigger (only for All Categories, no active search)
+                            if (hasMoreCategories && !isSearching) {
+                                item {
+                                    // FIX: re-fire whenever the row set or filters change while
+                                    // the spinner is visible, so pagination never stalls after
+                                    // a genre selection or an empty category batch.
+                                    LaunchedEffect(state.rows.size, state.selectedCategory, state.selectedGenre) {
+                                        viewModel.loadMoreCategories()
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(16.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        CircularProgressIndicator(
+                                            color = BbAccent,
+                                            strokeWidth = 2.dp,
+                                            modifier = Modifier.size(32.dp)
+                                        )
+                                    }
+                                }
+                            }
+                            item(key = "bottom_spacer") { Spacer(modifier = Modifier.height(32.dp)) }
                         }
-                        items(state.rows, key = { it.id }) { row ->
-                            CarouselRow(
-                                row = row,
+                    } else {
+                        val gridRow = state.rows.firstOrNull()
+                        if (gridRow != null && gridRow.items.isNotEmpty()) {
+                            PosterGrid(
+                                row = gridRow,
                                 favoriteIds = favoriteIds,
                                 progressMap = progressMap,
                                 onItemClick = { item ->
@@ -215,33 +267,14 @@ fun HomeScreen(
                                 },
                                 onItemLongClick = { item -> viewModel.toggleFavorite(item) },
                                 onFavoriteIconClick = { item -> viewModel.toggleFavorite(item) },
-                                onLoadMore = { viewModel.loadMoreRowItems(row.id) }
+                                onLoadMore = { viewModel.loadMoreRowItems(gridRow.id) },
+                                modifier = Modifier.fillMaxSize()
                             )
-                        }
-                        // Vertical Pagination Trigger (only for All Categories, no active search)
-                        if (hasMoreCategories && isAllCategories && !isSearching) {
-                            item {
-                                // FIX: re-fire whenever the row set or filters change while
-                                // the spinner is visible, so pagination never stalls after
-                                // a genre selection or an empty category batch.
-                                LaunchedEffect(state.rows.size, state.selectedCategory, state.selectedGenre) {
-                                    viewModel.loadMoreCategories()
-                                }
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(16.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    CircularProgressIndicator(
-                                        color = BbAccent,
-                                        strokeWidth = 2.dp,
-                                        modifier = Modifier.size(32.dp)
-                                    )
-                                }
+                        } else if (!state.isLoading) {
+                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Text(text = "No items found", color = BbTextMuted, fontSize = 14.sp)
                             }
                         }
-                        item(key = "bottom_spacer") { Spacer(modifier = Modifier.height(32.dp)) }
                     }
                 }
             }

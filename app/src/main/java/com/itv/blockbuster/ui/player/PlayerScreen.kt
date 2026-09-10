@@ -2,6 +2,7 @@ package com.itv.blockbuster.ui.player
 
 import android.app.Activity
 import android.content.pm.ActivityInfo
+import android.view.View
 import android.view.ViewGroup
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
@@ -107,6 +108,29 @@ fun PlayerScreen(
     val context = LocalContext.current
     val activity = context as? Activity
 
+    // ── NEW: VOD touch gesture state (double-tap seek, swipe brightness/volume) ──
+    // and the translucent title overlay (Movie/Series name + S#E# + episode name).
+    // topOverlayVisible doubles as "is the native player controller visible" - see
+    // the ControllerVisibilityListener wired up on the PlayerView below, which keeps
+    // this in sync (including the controller's own auto-hide timeout) so our custom
+    // gestures only run while the native controller/seek-bar/buttons are hidden and
+    // never fight them for touches.
+    var titleInfo by remember { mutableStateOf(PlayerTitleInfo.from(playbackManager)) }
+    var topOverlayVisible by remember { mutableStateOf(false) }
+    var seekFeedback by remember { mutableStateOf<SeekFeedback?>(null) }
+    var seekToken by remember { mutableStateOf(0) }
+    var dragIndicatorType by remember { mutableStateOf<DragIndicatorType?>(null) }
+    val brightnessController = rememberBrightnessController(activity)
+    val volumeController = rememberVolumeController()
+
+    // Auto-hide the double-tap seek pill shortly after each tap.
+    LaunchedEffect(seekFeedback) {
+        if (seekFeedback != null) {
+            delay(650)
+            seekFeedback = null
+        }
+    }
+
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
 
     // Live: load channel context + show banner on entry
@@ -201,6 +225,7 @@ fun PlayerScreen(
             countdown = null
             ended = false
             viewModel.playNextEpisode()
+            titleInfo = PlayerTitleInfo.from(playbackManager)
         }
     }
 
@@ -259,12 +284,66 @@ fun PlayerScreen(
                     )
                     view.useController = !isLive
                     view.keepScreenOn = true
+                    // NEW: mirror the native controller's own show/hide state (including
+                    // its auto-hide timeout) into topOverlayVisible, so our custom touch
+                    // gestures below re-enable themselves the instant the controller
+                    // hides, and disable themselves the instant it's shown - avoiding any
+                    // conflict with tapping its buttons or dragging its seek bar.
+                    view.setControllerVisibilityListener(
+                        PlayerView.ControllerVisibilityListener { visibility ->
+                            topOverlayVisible = visibility == View.VISIBLE
+                        }
+                    )
                     view.hideController()
                     view.controllerShowTimeoutMs = 5000
                 }
             },
             modifier = Modifier.fillMaxSize()
         )
+
+        // ── VOD TOUCH GESTURES ──
+        // Double-tap left/right half to rewind/forward, vertical swipe on the left
+        // half for brightness and the right half for volume. Disabled while the
+        // native controller is visible (see the listener above) so we never steal
+        // touches from its buttons/seek bar, and disabled entirely for Live TV
+        // (which keeps its existing remote-first banner/zap controls).
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .vodTouchGestures(
+                    enabled = !isLive && !topOverlayVisible,
+                    player = player,
+                    rewindMs = rewindMs,
+                    forwardMs = forwardMs,
+                    brightnessController = brightnessController,
+                    volumeController = volumeController,
+                    onSeekFeedback = { direction, amount ->
+                        seekToken++
+                        seekFeedback = SeekFeedback(direction, amount, seekToken)
+                    },
+                    onDragIndicatorChange = { dragIndicatorType = it },
+                    onSingleTap = { playerViewRef?.showController() }
+                )
+        )
+
+        // ── TITLE OVERLAY (VOD only): Movie/Series name + S#E# + episode subtitle ──
+        if (!isLive) {
+            PlayerTitleOverlay(
+                info = titleInfo,
+                visible = topOverlayVisible,
+                modifier = Modifier.align(Alignment.TopCenter)
+            )
+            SeekFeedbackOverlay(feedback = seekFeedback, modifier = Modifier.fillMaxSize())
+            DragIndicatorOverlay(
+                type = dragIndicatorType,
+                level = when (dragIndicatorType) {
+                    DragIndicatorType.BRIGHTNESS -> brightnessController.level
+                    DragIndicatorType.VOLUME -> volumeController.level
+                    null -> 0f
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+        }
 
         // ── LIVE INFO BANNER ──
         if (isLive && bannerVisible && banner != null) {
@@ -305,6 +384,7 @@ fun PlayerScreen(
                         onClick = {
                             countdown = null
                             viewModel.playNextEpisode()
+                            titleInfo = PlayerTitleInfo.from(playbackManager)
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = BbAccent)
                     ) { Text("Play Now") }

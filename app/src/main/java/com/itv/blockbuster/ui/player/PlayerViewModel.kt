@@ -172,6 +172,7 @@ class PlayerViewModel @Inject constructor(
 
             playbackManager.currentEpisodeId = next.id
             playbackManager.currentEpisodeNumber = next.episodeNumber
+            playbackManager.currentEpisodeName = next.name
             playbackManager.currentVideoId = fileId          // keep progress keyed by file ID
             playbackManager.pendingSeekMs = -1L              // next episode starts at 0
             playbackManager.restartFromBeginning = true

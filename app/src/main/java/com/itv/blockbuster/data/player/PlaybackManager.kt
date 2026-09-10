@@ -49,6 +49,10 @@ class PlaybackManager @Inject constructor(
     var currentSeasonNumber: String = ""
     var currentEpisodeId: String = ""
     var currentEpisodeNumber: String = ""
+    // NEW: the episode's own title (e.g. "The Reckoning"), used as the player's
+    // title-overlay subtitle. Distinct from currentTitle, which holds the parent
+    // series' name.
+    var currentEpisodeName: String = ""
     var currentVideoId: String = ""
     var episodeQueue: List<PortalVodItem> = emptyList()
 
@@ -109,6 +113,7 @@ class PlaybackManager @Inject constructor(
         currentSeasonNumber = ""
         currentEpisodeId = ""
         currentEpisodeNumber = ""
+        currentEpisodeName = ""
         currentVideoId = ""
         episodeQueue = emptyList()
     }
