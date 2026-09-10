@@ -85,9 +85,9 @@ class VodBrowserViewModel @Inject constructor(
      * level, instead of in VodRepository. The repository stays raw so a dedicated
      * Censored page can reuse the same data later.
      */
-    // private fun List<PortalVodItem>.visible(): List<PortalVodItem> = filter { !it.isCensored }
-    private fun List<PortalVodItem>.visible(): List<PortalVodItem> =
-        filter { it.isCensored == adultSessionManager.isAdultMode.value }
+
+    private fun List<PortalVodItem>.visible(): List<PortalVodItem> = filter { it.isCensored == adultSessionManager.isAdultMode.value }
+
     fun initialize(type: String) {
         if (isInitialized && _contentType == type) return
         _contentType = type
@@ -144,44 +144,44 @@ class VodBrowserViewModel @Inject constructor(
             // NEW: Invert category filter for Adult mode
             val isAdult = adultSessionManager.isAdultMode.value
             // Censored categories stay hidden on Movies / TV Shows (dedicated page later)
-            //val masterCats = vodRepository.getCategories().getOrDefault(emptyList())   .filter { !it.isCensored }
-            val masterCats = vodRepository.getCategories().getOrDefault(emptyList()).filter { it.isCensored == isAdult }
 
-            val masterGenres = vodRepository.getGenres().getOrDefault(emptyList())
+            val masterCats = vodRepository.getCategories().getOrDefault(emptyList()).filter { it.isCensored == isAdult }
+            val masterGenres = vodRepository.getGenres().getOrDefault(emptyList()).filter { it.isCensored == isAdult }
 
             val orderKey = if (_contentType == "series") "order_series" else "order_vod"
             val rawOrder = settings.getString(profileId, serverId, orderKey, "")
-            val ordered = CategorySortHelper.applyToCategories(masterCats, rawOrder)
-            val filteredOrdered = ordered.filter { it.id != "*" && it.id != "0" }
 
-            //val uncensoredGenres = masterGenres.filter { !it.isCensored }
-            val uncensoredGenres = masterGenres.filter { it.isCensored == isAdult }
+            val orderedVisible = if (isAdult) {
+                masterCats.filter { it.id != "*" && it.id != "0" }
+            } else {
+                CategorySortHelper.applyToCategories(masterCats, rawOrder).filter { it.id != "*" && it.id != "0" }
+            }
 
-            _allCategories.value = filteredOrdered
-            val initialBatch = filteredOrdered.take(5)
+            _allCategories.value = orderedVisible
+            val initialBatch = orderedVisible.take(5)
             _visibleCategories.value = initialBatch
-            _hasMoreCategories.value = filteredOrdered.size > 5
+            _hasMoreCategories.value = orderedVisible.size > 5
 
-            val defaultCat = ordered.firstOrNull { it.id == "*" || it.id == "0" } ?: ordered.firstOrNull()
-            val allGenre = PortalCategory(id = "*", title = "All Genres", alias = "all", isCensored = false)
-            val genresWithAll = listOf(allGenre) + uncensoredGenres
+            val allCat = PortalCategory(id = "*", title = "All Categories", alias = "all", isCensored = isAdult)
+            val categoriesWithAll = listOf(allCat) + orderedVisible
+
+            val allGenre = PortalCategory(id = "*", title = "All Genres", alias = "all", isCensored = isAdult)
+            val genresWithAll = listOf(allGenre) + masterGenres
 
             _state.update {
                 it.copy(
-                    categories = ordered,
-                    selectedCategory = defaultCat,
+                    categories = categoriesWithAll,
+                    selectedCategory = allCat,
                     genres = genresWithAll,
                     selectedGenre = allGenre,
                     searchQuery = ""
                 )
             }
 
-            if (defaultCat != null && (defaultCat.id == "*" || defaultCat.id == "0")) {
+            if (allCat.id == "*" || allCat.id == "0") {
                 loadInitialRows(initialBatch)
-            } else if (defaultCat != null) {
-                loadContent(defaultCat)
             } else {
-                _state.update { it.copy(isLoading = false) }
+                loadContent(allCat)
             }
         } catch (e: Exception) {
             _state.update { it.copy(isLoading = false) }

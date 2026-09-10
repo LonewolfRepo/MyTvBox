@@ -125,7 +125,7 @@ class PlayerViewModel @Inject constructor(
 
     fun saveCurrentProgress() {
         viewModelScope.launch {
-            if (adultSessionManager.isAdultMode.value) return@launch
+            //if (adultSessionManager.isAdultMode.value) return@launch
 
             val player = playbackManager.player
             val videoId = playbackManager.currentVideoId

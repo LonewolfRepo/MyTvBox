@@ -7,6 +7,7 @@ import com.itv.blockbuster.data.local.UserPreferencesRepository
 import com.itv.blockbuster.data.local.entity.PlaybackProgressEntity
 import com.itv.blockbuster.data.player.PlaybackManager
 import com.itv.blockbuster.data.repository.VodRepository
+import com.itv.blockbuster.data.session.AdultSessionManager
 import com.itv.blockbuster.data.session.StalkerSessionManager
 import com.itv.blockbuster.domain.model.PortalVodItem
 import com.itv.blockbuster.util.VodNavigationCache
@@ -48,6 +49,7 @@ class VodDetailViewModel @Inject constructor(
     private val sessionManager: StalkerSessionManager,
     private val prefs: UserPreferencesRepository,
     private val playbackManager: PlaybackManager,
+    private val adultSessionManager: AdultSessionManager,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
     private val contentType: String = savedStateHandle.get<String>("contentType") ?: "vod"
@@ -386,9 +388,11 @@ class VodDetailViewModel @Inject constructor(
                 playbackManager.pendingSeekMs =
                     if (resume) resolveResumePosition(fileId) else seekMs
 
-                val profileId = prefs.activeProfileIdFlow.first()
-                val serverId = sessionManager.activePortal.value?.serverId ?: 0
-                vodRepository.addRecent(profileId, serverId, item, "SERIES")
+                if (!adultSessionManager.isAdultMode.value) {
+                    val profileId = prefs.activeProfileIdFlow.first()
+                    val serverId = sessionManager.activePortal.value?.serverId ?: 0
+                    vodRepository.addRecent(profileId, serverId, item, "SERIES")
+                }
 
                 if (url.isNotEmpty()) onPlay(url)
             } catch (e: Exception) {
@@ -438,9 +442,11 @@ class VodDetailViewModel @Inject constructor(
                 playbackManager.episodeQueue = emptyList()
                 playbackManager.pendingSeekMs = resolveResumePosition(fileId)
 
-                val profileId = prefs.activeProfileIdFlow.first()
-                val serverId = sessionManager.activePortal.value?.serverId ?: 0
-                vodRepository.addRecent(profileId, serverId, item, "VOD")
+                if (!adultSessionManager.isAdultMode.value) {
+                    val profileId = prefs.activeProfileIdFlow.first()
+                    val serverId = sessionManager.activePortal.value?.serverId ?: 0
+                    vodRepository.addRecent(profileId, serverId, item, "VOD")
+                }
 
                 if (url.isNotEmpty()) onPlay(url)
             } catch (e: Exception) {
@@ -505,6 +511,7 @@ class VodDetailViewModel @Inject constructor(
     }
 
     fun toggleFavorite() {
+        if (adultSessionManager.isAdultMode.value) return
         val item = _state.value.item ?: return
         viewModelScope.launch {
             val profileId = prefs.activeProfileIdFlow.first()

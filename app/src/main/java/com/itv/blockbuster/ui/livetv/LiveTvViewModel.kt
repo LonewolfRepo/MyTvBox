@@ -56,12 +56,7 @@ class LiveTvViewModel @Inject constructor(
     val favoriteIds: StateFlow<Set<String>> = _favoriteIds.asStateFlow()
 
     init {
-        /*viewModelScope.launch {
-            combine(prefs.activeProfileIdFlow, sessionManager.activePortal) { p, sp ->
-                Pair(p, sp?.serverId ?: 0)
-            }.flatMapLatest { (p, s) -> liveTvRepository.getFavorites(p, s, "LIVE") }
-                .collect { favs -> _uiState.update { it.copy(favoriteIds = favs.map { f -> f.itemId }.toSet()) } }
-        }*/
+
 
         viewModelScope.launch {
             combine(prefs.activeProfileIdFlow, sessionManager.activePortal) { p, sp ->
@@ -103,25 +98,16 @@ class LiveTvViewModel @Inject constructor(
     private suspend fun load() {
         _uiState.update { it.copy(isLoading = true) }
         val allCats = liveTvRepository.getCategories().getOrDefault(emptyList())
+        val isAdult = adultSessionManager.isAdultMode.value
 
         // FIX: Identify and filter out censored categories (censored == 1)
         val censoredCategoryIds = allCats.filter { it.isCensored }.map { it.id }.toSet()
-         //val cats = allCats.filter { !it.isCensored }
-        // NEW: Invert category filter for Adult mode
-        val isAdult = adultSessionManager.isAdultMode.value
-        val cats = allCats.filter { it.isCensored == isAdult }
+        val baseCats = allCats.filter { it.isCensored == isAdult }
 
         val allRaw = liveTvRepository.getAllChannels().getOrDefault(PortalPage(emptyList(), 0)).items
-
-        // FIX: Filter out channels belonging to censored categories so they
-        // don't leak into the "All Categories" view.
-       // val all = liveTvRepository.getAllChannels().getOrDefault(PortalPage(emptyList(), 0)).items .filter { it.genreId !in censoredCategoryIds }
-
-        // NEW: Filter channels based on Adult mode
-        val all = if (isAdult) {
-            allRaw.filter { it.genreId in censoredCategoryIds }
-        } else {
-            allRaw.filter { it.genreId !in censoredCategoryIds }
+        val all = allRaw.filter {
+            if (isAdult) it.genreId in censoredCategoryIds
+            else it.genreId !in censoredCategoryIds
         }
 
 
@@ -129,17 +115,22 @@ class LiveTvViewModel @Inject constructor(
         val s = sessionManager.activePortal.value?.serverId ?: 0
         val rawOrder = settings.getString(p, s, "order_live", "")
 
-        // STRICTLY apply visibility and sort order
-        val ordered = CategorySortHelper.applyToCategories(cats, rawOrder)
-        val default = ordered.firstOrNull { it.id == "*" || it.id == "0" || it.id == "all" } ?: ordered.firstOrNull()
+        val orderedVisible = if (isAdult) {
+            baseCats.filter { it.id != "*" && it.id != "0" && it.id != "all" }
+        } else {
+            CategorySortHelper.applyToCategories(baseCats, rawOrder).filter { it.id != "*" && it.id != "0" && it.id != "all" }
+        }
+
+        val allCat = PortalCategory(id = "*", title = "All Categories", alias = "all", isCensored = isAdult)
+        val categoriesWithAll = listOf(allCat) + orderedVisible
 
         _uiState.update {
             it.copy(
                 isLoading = false,
-                categories = ordered,
-                selectedCategory = default,
+                categories = categoriesWithAll,
+                selectedCategory = allCat,
                 allChannels = all,
-                channels = filterChannels(all, default)
+                channels = all
             )
         }
     }

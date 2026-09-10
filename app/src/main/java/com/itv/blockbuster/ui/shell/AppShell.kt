@@ -173,7 +173,17 @@ private fun RailShell(
                         label = section.label,
                         expanded = railExpanded,
                         selected = currentRoute == section.route,
-                        onClick = { navController.navigateToSection(section.route) }
+                        onClick = {
+                            // FIX: Force clear saved state for Adult route to re-trigger password prompt
+                            if (section == AppSection.ADULT) {
+                                navController.navigate(Routes.ADULT) {
+                                    popUpTo(Routes.ADULT) { inclusive = true }
+                                    launchSingleTop = true
+                                }
+                            } else {
+                                navController.navigateToSection(section.route)
+                            }
+                        }
                     )
                 }
             }
@@ -308,6 +318,7 @@ private fun PortraitShell(
             content()
             if (menuOpen) {
                 OverlayMenu(
+                    navController = navController,
                     currentRoute = currentRoute,
                     onSelect = { route ->
                         menuOpen = false
@@ -366,6 +377,7 @@ private fun PortraitShell(
 
 @Composable
 private fun OverlayMenu(
+    navController: NavHostController,
     currentRoute: String?,
     onSelect: (String) -> Unit,
     onClose: () -> Unit,
@@ -392,7 +404,18 @@ private fun OverlayMenu(
                 textAlign = TextAlign.Center,
                 modifier = Modifier
                     .clip(RoundedCornerShape(12.dp))
-                    .clickable { onSelect(section.route) }
+                    .clickable {
+                        // FIX: Force clear saved state for Adult route
+                        if (section == AppSection.ADULT) {
+                            onClose()
+                            navController.navigate(Routes.ADULT) {
+                                popUpTo(Routes.ADULT) { inclusive = true }
+                                launchSingleTop = true
+                            }
+                        } else {
+                            onSelect(section.route)
+                        }
+                    }
                     .padding(horizontal = 32.dp, vertical = 14.dp)
             )
         }
