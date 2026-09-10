@@ -23,7 +23,14 @@ class AdultSessionManager @Inject constructor() {
     val requestUnlock: StateFlow<Int> = _requestUnlock.asStateFlow()
 
     fun enterAdultMode() { _isAdultMode.value = true }
-    fun exitAdultMode() { _isAdultMode.value = false }
+
+    // FIX: exitAdultMode now also locks the session. This ensures that navigating
+    // away from ANY adult route resets the unlock state, forcing the password
+    // dialog to reappear when the user clicks the Adult rail item again.
+    fun exitAdultMode() {
+        _isAdultMode.value = false
+        _isUnlocked.value = false
+    }
 
     fun unlock() { _isUnlocked.value = true }
 

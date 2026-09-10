@@ -59,7 +59,7 @@ class HomeViewModel @Inject constructor(
     private val sessionManager: StalkerSessionManager,
     private val prefs: UserPreferencesRepository,
     private val settings: SettingsRepository,
-    private val adultSessionManager: AdultSessionManager // NEW
+    private val adultSessionManager: AdultSessionManager
 ) : ViewModel() {
 
     companion object {
@@ -92,12 +92,11 @@ class HomeViewModel @Inject constructor(
     private var searchJob: Job? = null
 
     /**
-     * NEW: Censored (adult) items are stripped at the page level (Home, Movies,
-     * TV Shows) instead of in VodRepository
+     * FIX: Dynamically filter items based on Adult Mode.
+     * In Adult Mode, ONLY show censored items. In Normal Mode, hide them.
      */
-    // FIX: In Adult mode, trust the category filter and don't drop items
-    // just because the portal forgot to set the censored flag on them.
-    private fun List<PortalVodItem>.visible(): List<PortalVodItem> = filter { !it.isCensored }
+    private fun List<PortalVodItem>.visible(): List<PortalVodItem> =
+        if (adultSessionManager.isAdultMode.value) filter { it.isCensored } else filter { !it.isCensored }
 
     init {
         viewModelScope.launch {
@@ -198,29 +197,40 @@ class HomeViewModel @Inject constructor(
         // Read the Home category order/visibility setting and remember its signature
         val rawOrder = settings.getString(p, s, "order_home", "")
         lastAppliedHomeOrder = rawOrder
+
         val categories = portalService.fetchVodCategories().getOrDefault(emptyList())
         val genres = portalService.fetchVodGenres().getOrDefault(emptyList())
+
 
         // Respect Home Category Settings:
         //  - only categories marked visible are kept
         //  - kept categories stay in the exact configured order
         // NEW: Invert filter for Adult mode
         // FIX: Push censored category IDs to global registry
+
+        // Push censored category IDs to global registry for Player/Detail bypass logic
+        val isAdult = adultSessionManager.isAdultMode.value
         val censoredIds = categories.filter { it.isCensored }.map { it.id }.toSet()
         adultSessionManager.updateCensoredCategories(censoredIds)
 
-        val uncensoredCategories = categories.filter { !it.isCensored }
-        val uncensoredGenres = genres.filter { !it.isCensored }
-        val orderedVisible = CategorySortHelper.applyToCategories(uncensoredCategories, rawOrder)
+        // FIX: Invert filter for Adult mode. Show ONLY censored in Adult mode.
+        val filteredCategories = categories.filter { it.isCensored == isAdult }
+        val filteredGenres = genres.filter { it.isCensored == isAdult }
+
+        val orderedVisible = CategorySortHelper.applyToCategories(filteredCategories, rawOrder)
             .filter { it.id != "*" && it.id != "0" }
+
         _allCategories.value = orderedVisible
         val initialBatch = orderedVisible.take(5)
         _visibleCategories.value = initialBatch
         _hasMoreCategories.value = orderedVisible.size > 5
-        val allCat = PortalCategory(id = "*", title = "All Categories", alias = "all", isCensored = false)
+
+        val allCat = PortalCategory(id = "*", title = if (isAdult) "All Adult" else "All Categories", alias = "all", isCensored = isAdult)
         val categoriesWithAll = listOf(allCat) + orderedVisible
-        val allGenre = PortalCategory(id = "*", title = "All Genres", alias = "all", isCensored = false)
-        val genresWithAll = listOf(allGenre) + uncensoredGenres
+
+        val allGenre = PortalCategory(id = "*", title = if (isAdult) "All Adult" else "All Genres", alias = "all", isCensored = isAdult)
+        val genresWithAll = listOf(allGenre) + filteredGenres
+
         _uiState.update {
             it.copy(
                 categories = categoriesWithAll,
