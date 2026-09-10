@@ -95,6 +95,46 @@ fun NavHostController.navigateToSection(route: String) {
 private fun encodeUrl(url: String): String =
     try { java.net.URLEncoder.encode(url, "UTF-8") } catch (e: Exception) { url }
 
+/**
+ * FIX: Hard gate for any Adult sub-screen (Adult Live TV, Adult VOD Browser) that
+ * sits below the AdultHubScreen password prompt.
+ *
+ * AdultHubScreen only shows its password dialog while it is actually composed.
+ * The bottom-nav uses navigateToSection(...) with popUpTo { saveState = true } /
+ * restoreState = true, which is the standard pattern for preserving each tab's own
+ * back stack across tab switches. That means the Adult tab's back stack (Adult ->
+ * Adult VOD Browser) is preserved too - so re-selecting "Adult" after visiting
+ * another tab can restore straight to Adult VOD Browser, never re-composing
+ * AdultHubScreen and never re-prompting for the password.
+ *
+ * This composable re-checks the global unlock state on every (re)composition of an
+ * Adult sub-screen. If the session isn't unlocked - whether because it was never
+ * unlocked this visit, or because it got locked by navigating away - it immediately
+ * redirects back to the Adult hub, where the password dialog is shown, instead of
+ * rendering the protected content.
+ */
+@Composable
+private fun AdultGate(
+    navController: NavHostController,
+    adultSessionManager: AdultSessionManager,
+    content: @Composable () -> Unit
+) {
+    val isUnlocked by adultSessionManager.isUnlocked.collectAsState()
+
+    LaunchedEffect(isUnlocked) {
+        if (!isUnlocked) {
+            navController.navigate(Routes.ADULT) {
+                popUpTo(Routes.ADULT) { inclusive = true }
+                launchSingleTop = true
+            }
+        }
+    }
+
+    if (isUnlocked) {
+        content()
+    }
+}
+
 @Composable
 fun AppRoot() {
     val startupViewModel: StartupViewModel = hiltViewModel()
@@ -126,12 +166,23 @@ fun AppNavigation(
     val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route
 
     // FIX: Safely destroy adult session when navigating to ANY non-adult route
+    // ... but vod_detail / player / catchup / vod_episodes are SHARED routes used
+    // by both normal and adult content (e.g. tapping a video inside Adult VOD
+    // Browser lands here). None of these start with "adult", so treating every
+    // non-adult-prefixed route as "leaving Adult" was locking the session (and
+    // dropping isAdultMode) the instant you opened a detail page or hit Play from
+    // inside Adult - breaking playback and forcing a fresh password prompt every
+    // time you backed out to Adult VOD/Live. These shared routes are now treated
+    // as neutral: they don't change the adult session state either way, so the
+    // session held from Adult carries through detail -> player -> back cleanly.
+    val neutralRoutePrefixes = listOf("vod_detail", "player", "catchup", "vod_episodes")
     LaunchedEffect(currentRoute) {
         val isAdultRoute = currentRoute?.startsWith("adult") == true || currentRoute == Routes.ADULT
-        if (isAdultRoute) {
-            adultSessionManager.enterAdultMode()
-        } else {
-            adultSessionManager.lock()
+        val isNeutralRoute = neutralRoutePrefixes.any { currentRoute?.startsWith(it) == true }
+        when {
+            isAdultRoute -> adultSessionManager.enterAdultMode()
+            isNeutralRoute -> { /* no-op: preserve whatever adult session state is already active */ }
+            else -> adultSessionManager.lock()
         }
     }
 
@@ -238,20 +289,31 @@ fun AppNavigation(
         }
         composable(Routes.ADULT_LIVE_TV) {
             AppShell(navController) {
-                LiveTvScreen(
-                    onPlayChannel = { url, channelId -> navController.navigate("player/${encodeUrl(url)}/$channelId/none") },
-                    onOpenCatchup = { channelId -> navController.navigate("catchup/$channelId") }
-                )
+                // FIX: Guard against the password prompt being bypassed. Because Adult
+                // uses the same save/restoreState bottom-nav pattern as the other tabs,
+                // navigating away and back can restore this destination directly
+                // (skipping AdultHubScreen entirely). This gate re-checks the unlock
+                // state every time this destination is (re)composed and bounces back
+                // to the password screen if it isn't unlocked.
+                AdultGate(navController, adultSessionManager) {
+                    LiveTvScreen(
+                        onPlayChannel = { url, channelId -> navController.navigate("player/${encodeUrl(url)}/$channelId/none") },
+                        onOpenCatchup = { channelId -> navController.navigate("catchup/$channelId") }
+                    )
+                }
             }
         }
         // FIX: Switched from HomeScreen to VodBrowserScreen to prevent lifecycle freezing
         // and to provide a consistent carousel UI for Adult VOD matching the Movies section.
         composable(Routes.ADULT_VOD_BROWSER) {
             AppShell(navController) {
-                HomeScreen(
-                    onOpenPortals = { navController.navigateToSection(Routes.SERVERS) },
-                    onOpenVodDetail = { itemId, type -> navController.navigate("vod_detail/$itemId/$type") }
-                )
+                // FIX: same unlock gate as Adult Live TV above - see comment there.
+                AdultGate(navController, adultSessionManager) {
+                    HomeScreen(
+                        onOpenPortals = { navController.navigateToSection(Routes.SERVERS) },
+                        onOpenVodDetail = { itemId, type -> navController.navigate("vod_detail/$itemId/$type") }
+                    )
+                }
             }
         }
         composable(

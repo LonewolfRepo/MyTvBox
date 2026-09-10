@@ -522,7 +522,17 @@ class VodDetailViewModel @Inject constructor(
             if (_state.value.isFavorite) {
                 vodRepository.removeFavorite(profileId, serverId, item.id)
             } else {
-                vodRepository.toggleFavorite(profileId, serverId, item, item.contentType)
+                // FIX: item.contentType is NOT reliable - fetchVodList() always parses
+                // items with a hardcoded "vod" contentType regardless of whether the
+                // item is actually a movie or a series (the portal returns both from
+                // the same list endpoint, distinguished by the isSeries flag, not by
+                // type). Every other favorite/recent call site in the app already
+                // works around this by checking item.isSeries instead; toggleFavorite()
+                // here was the one place still trusting item.contentType, which made
+                // every favorite added from the detail screen land in Movies. Use the
+                // same isSeries / nav-arg check already used above for loadSeasons().
+                val favoriteType = if (item.isSeries || contentType == "series") "SERIES" else "VOD"
+                vodRepository.toggleFavorite(profileId, serverId, item, favoriteType)
             }
         }
     }

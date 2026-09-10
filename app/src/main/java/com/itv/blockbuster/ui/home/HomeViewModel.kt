@@ -93,10 +93,18 @@ class HomeViewModel @Inject constructor(
 
     /**
      * FIX: Dynamically filter items based on Adult Mode.
-     * In Adult Mode, ONLY show censored items. In Normal Mode, hide them.
+     * An item counts as "adult" if EITHER the item itself is flagged censored
+     * OR the category it belongs to is flagged censored (some portals only
+     * mark the category, some only mark individual items, some mark both).
+     * In Adult Mode, ONLY show adult items. In Normal Mode, hide them.
      */
-    private fun List<PortalVodItem>.visible(): List<PortalVodItem> =
-        if (adultSessionManager.isAdultMode.value) filter { it.isCensored } else filter { !it.isCensored }
+    private fun List<PortalVodItem>.visible(): List<PortalVodItem> {
+        val isAdult = adultSessionManager.isAdultMode.value
+        return filter { item ->
+            val isAdultItem = item.isCensored || adultSessionManager.isCategoryCensored(item.categoryId)
+            isAdultItem == isAdult
+        }
+    }
 
     init {
         viewModelScope.launch {
@@ -214,7 +222,15 @@ class HomeViewModel @Inject constructor(
         adultSessionManager.updateCensoredCategories(censoredIds)
 
         // FIX: Invert filter for Adult mode. Show ONLY censored in Adult mode.
-        val filteredCategories = categories.filter { it.isCensored == isAdult }
+        // NEW: A category can hold adult content two ways: the category itself is
+        // flagged censored, OR it's a normal category that has some individually
+        // censored items mixed in. The row-building step (via .visible()) already
+        // knows how to pick out the right items for each mode, so here we must not
+        // exclude "not category-level-censored" categories in Adult mode - otherwise
+        // any adult item living inside an otherwise-normal category never gets a
+        // chance to surface as a row. We only need to exclude the opposite case:
+        // fully category-level-censored categories don't belong in Normal mode.
+        val filteredCategories = if (isAdult) categories else categories.filter { !it.isCensored }
         val filteredGenres = genres.filter { it.isCensored == isAdult }
 
         val orderedVisible = CategorySortHelper.applyToCategories(filteredCategories, rawOrder)
