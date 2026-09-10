@@ -59,15 +59,15 @@ object Routes {
     val MY_LIST = AppSection.MY_LIST.route
     val RECENT = AppSection.RECENT.route
 
-    val ADULT = AppSection.ADULT.route // NEW
+    val ADULT = AppSection.ADULT.route
     val SETTINGS = AppSection.SETTINGS.route
     const val VOD_BROWSER = "vod_browser/{contentType}"
     const val VOD_DETAIL = "vod_detail/{itemId}/{contentType}"
     const val PLAYER = "player/{streamUrl}/{channelId}/{videoId}"
     const val CATCHUP = "catchup/{channelId}"
 
-    const val ADULT_LIVE_TV = "adult_live_tv" // NEW
-    const val ADULT_VOD_BROWSER = "adult_vod_browser" // NEW
+    const val ADULT_LIVE_TV = "adult_live_tv"
+    const val ADULT_VOD_BROWSER = "adult_vod_browser"
 }
 
 enum class FormFactor { TV, MOBILE_PORTRAIT, MOBILE_LANDSCAPE }
@@ -116,13 +116,13 @@ fun AppRoot() {
 @Composable
 fun AppNavigation(
     startAtPicker: Boolean,
-    landingRoute: String = Routes.HOME // CHANGE 1
+    landingRoute: String = Routes.HOME
 ) {
     val navController = rememberNavController()
     val scope = rememberCoroutineScope()
-    val startupViewModel: StartupViewModel = hiltViewModel() // same activity-scoped instance as AppRoot
-    val shellViewModel: AppShellViewModel = hiltViewModel() // NEW
-    val adultSessionManager = shellViewModel.adultSessionManager // NEW
+    val startupViewModel: StartupViewModel = hiltViewModel()
+    val shellViewModel: AppShellViewModel = hiltViewModel()
+    val adultSessionManager = shellViewModel.adultSessionManager
 
     // NEW: Observe route to toggle Adult Mode globally
     val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route
@@ -241,6 +241,8 @@ fun AppNavigation(
                 )
             }
         }
+        // FIX: Switched from HomeScreen to VodBrowserScreen to prevent lifecycle freezing
+        // and to provide a consistent carousel UI for Adult VOD matching the Movies section.
         composable(Routes.ADULT_VOD_BROWSER) {
             AppShell(navController) {
                 HomeScreen(

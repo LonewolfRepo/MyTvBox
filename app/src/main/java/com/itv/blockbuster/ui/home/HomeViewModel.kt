@@ -93,11 +93,14 @@ class HomeViewModel @Inject constructor(
 
     /**
      * NEW: Censored (adult) items are stripped at the page level (Home, Movies,
-     * TV Shows) instead of in VodRepository, so a dedicated Censored page can
-     * reuse the raw repository data later.
+     * TV Shows) instead of in VodRepository
      */
-    private fun List<PortalVodItem>.visible(): List<PortalVodItem> = filter { it.isCensored == adultSessionManager.isAdultMode.value }
-
+    // FIX: In Adult mode, trust the category filter and don't drop items
+    // just because the portal forgot to set the censored flag on them.
+    private fun List<PortalVodItem>.visible(): List<PortalVodItem> {
+        val isAdult = adultSessionManager.isAdultMode.value
+        return if (isAdult) this else filter { !it.isCensored }
+    }
 
     init {
         viewModelScope.launch {
@@ -207,13 +210,14 @@ class HomeViewModel @Inject constructor(
         // Respect Home Category Settings:
         //  - only categories marked visible are kept
         //  - kept categories stay in the exact configured order
-
         // NEW: Invert filter for Adult mode
 
-        val baseCategories = categories.filter { it.isCensored == isAdult }
-        val baseGenres = genres.filter { it.isCensored == isAdult }
+        val baseCategories = if (isAdult) categories.filter { it.isCensored } else categories.filter { !it.isCensored }
+        val baseGenres = if (isAdult) genres.filter { it.isCensored } else genres.filter { !it.isCensored }
+
 
         val orderedVisible = if (isAdult) {
+            // Bypass settings for Adult mode, show all censored categories
             baseCategories.filter { it.id != "*" && it.id != "0" }
         } else {
             CategorySortHelper.applyToCategories(baseCategories, rawOrder)

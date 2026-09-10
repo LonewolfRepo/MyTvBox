@@ -388,6 +388,7 @@ class VodDetailViewModel @Inject constructor(
                 playbackManager.pendingSeekMs =
                     if (resume) resolveResumePosition(fileId) else seekMs
 
+                // FIX: Block recents in adult mode
                 if (!adultSessionManager.isAdultMode.value) {
                     val profileId = prefs.activeProfileIdFlow.first()
                     val serverId = sessionManager.activePortal.value?.serverId ?: 0
@@ -442,6 +443,7 @@ class VodDetailViewModel @Inject constructor(
                 playbackManager.episodeQueue = emptyList()
                 playbackManager.pendingSeekMs = resolveResumePosition(fileId)
 
+                // FIX: Block recents in adult mode
                 if (!adultSessionManager.isAdultMode.value) {
                     val profileId = prefs.activeProfileIdFlow.first()
                     val serverId = sessionManager.activePortal.value?.serverId ?: 0

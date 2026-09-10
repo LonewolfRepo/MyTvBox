@@ -143,18 +143,20 @@ class VodBrowserViewModel @Inject constructor(
         try {
             // NEW: Invert category filter for Adult mode
             val isAdult = adultSessionManager.isAdultMode.value
-            // Censored categories stay hidden on Movies / TV Shows (dedicated page later)
+            val masterCats = vodRepository.getCategories().getOrDefault(emptyList())
+            val masterGenres = vodRepository.getGenres().getOrDefault(emptyList())
 
-            val masterCats = vodRepository.getCategories().getOrDefault(emptyList()).filter { it.isCensored == isAdult }
-            val masterGenres = vodRepository.getGenres().getOrDefault(emptyList()).filter { it.isCensored == isAdult }
+            val baseCats = if (isAdult) masterCats.filter { it.isCensored } else masterCats.filter { !it.isCensored }
+            val baseGenres = if (isAdult) masterGenres.filter { it.isCensored } else masterGenres.filter { !it.isCensored }
 
             val orderKey = if (_contentType == "series") "order_series" else "order_vod"
             val rawOrder = settings.getString(profileId, serverId, orderKey, "")
 
             val orderedVisible = if (isAdult) {
-                masterCats.filter { it.id != "*" && it.id != "0" }
+                // Bypass settings for Adult mode, show all censored categories
+                baseCats.filter { it.id != "*" && it.id != "0" }
             } else {
-                CategorySortHelper.applyToCategories(masterCats, rawOrder).filter { it.id != "*" && it.id != "0" }
+                CategorySortHelper.applyToCategories(baseCats, rawOrder).filter { it.id != "*" && it.id != "0" }
             }
 
             _allCategories.value = orderedVisible
@@ -166,7 +168,7 @@ class VodBrowserViewModel @Inject constructor(
             val categoriesWithAll = listOf(allCat) + orderedVisible
 
             val allGenre = PortalCategory(id = "*", title = "All Genres", alias = "all", isCensored = isAdult)
-            val genresWithAll = listOf(allGenre) + masterGenres
+            val genresWithAll = listOf(allGenre) + baseGenres
 
             _state.update {
                 it.copy(

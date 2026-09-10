@@ -175,6 +175,7 @@ private fun RailShell(
                         selected = currentRoute == section.route,
                         onClick = {
                             // FIX: Force clear saved state for Adult route to re-trigger password prompt
+                            // and prevent backstack pollution that causes navigation freezes
                             if (section == AppSection.ADULT) {
                                 navController.navigate(Routes.ADULT) {
                                     popUpTo(Routes.ADULT) { inclusive = true }
