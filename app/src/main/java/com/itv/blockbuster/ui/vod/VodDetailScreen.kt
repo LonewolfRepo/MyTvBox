@@ -41,6 +41,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -49,6 +50,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -76,6 +79,7 @@ import com.itv.blockbuster.ui.theme.BbTextPrimary
 import com.itv.blockbuster.ui.theme.BbTextSecondary
 import java.text.SimpleDateFormat
 import java.util.Locale
+import kotlinx.coroutines.delay
 
 @Composable
 fun VodDetailScreen(
@@ -86,6 +90,18 @@ fun VodDetailScreen(
   val state by viewModel.state.collectAsState()
   val isPortrait = rememberFormFactor() == FormFactor.MOBILE_PORTRAIT
   val lifecycleOwner = LocalLifecycleOwner.current
+
+  // D-pad focus: land on the Play button once the item finishes loading.
+  val playFocusRequester = remember { FocusRequester() }
+  LaunchedEffect(state.item != null) {
+    if (state.item != null) {
+      // Give the freshly-composed layout a beat to lay out before requesting.
+      repeat(20) { attempt ->
+        delay(50)
+        if (playFocusRequester.runCatching { requestFocus() }.isSuccess) return@LaunchedEffect
+      }
+    }
+  }
 
   DisposableEffect(lifecycleOwner) {
     val observer = LifecycleEventObserver { _, event ->
@@ -113,6 +129,7 @@ fun VodDetailScreen(
             onSelectSeason = { viewModel.selectSeason(it) },
             onToggleSort = { viewModel.toggleEpisodeSort() },
             onToggleFavorite = { viewModel.toggleFavorite() },
+            playFocusRequester = playFocusRequester,
         )
       } else {
         LandscapeLayout(
@@ -134,6 +151,7 @@ fun VodDetailScreen(
             },
             onMoreEpisodes = onOpenEpisodes,
             onToggleFavorite = { viewModel.toggleFavorite() },
+            playFocusRequester = playFocusRequester,
         )
       }
     }
@@ -156,6 +174,7 @@ private fun PortraitLayout(
     onSelectSeason: (PortalVodItem) -> Unit,
     onToggleSort: () -> Unit,
     onToggleFavorite: () -> Unit,
+    playFocusRequester: FocusRequester,
 ) {
   Column(modifier = Modifier.fillMaxSize()) {
     Box(
@@ -175,11 +194,18 @@ private fun PortraitLayout(
               Modifier.fillMaxSize()
                   .background(Brush.verticalGradient(listOf(Color.Transparent, BbBackground)))
       )
+      var playFocused by remember { mutableStateOf(false) }
       Box(
           modifier =
               Modifier.size(72.dp)
                   .clip(CircleShape)
                   .background(Color.Black.copy(alpha = 0.45f))
+                  .then(
+                      if (playFocused) Modifier.border(2.dp, BbAccent, CircleShape) else Modifier
+                  )
+                  .focusRequester(playFocusRequester)
+                  .focusable()
+                  .onFocusChanged { playFocused = it.isFocused }
                   .clickable {
                     if (state.hasSeasons) onPlayTarget() else onPlayMovie()
                   },
@@ -344,6 +370,7 @@ private fun LandscapeLayout(
     onRestart: () -> Unit,
     onMoreEpisodes: () -> Unit,
     onToggleFavorite: () -> Unit,
+    playFocusRequester: FocusRequester,
 ) {
   Box(modifier = Modifier.fillMaxSize()) {
     if (item.logoUrl.isNotEmpty()) {
@@ -485,6 +512,7 @@ private fun LandscapeLayout(
           label = playLabel,
           progressRatio = playProgressRatio,
           onClick = onPlayFirst,
+          focusRequester = playFocusRequester,
       )
       if (hasAnyProgress) {
         DetailActionButton(
@@ -520,9 +548,16 @@ private fun PlayButtonWithProgress(
     label: String,
     progressRatio: Float,
     onClick: () -> Unit,
+    focusRequester: FocusRequester? = null,
 ) {
   var focused by remember { mutableStateOf(false) }
-  Column(modifier = Modifier.width(340.dp).focusable().onFocusChanged { focused = it.isFocused }) {
+  Column(
+      modifier =
+          Modifier.width(340.dp)
+              .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
+              .focusable()
+              .onFocusChanged { focused = it.isFocused }
+  ) {
     Button(
         onClick = onClick,
         colors = ButtonDefaults.buttonColors(containerColor = BbAccent),

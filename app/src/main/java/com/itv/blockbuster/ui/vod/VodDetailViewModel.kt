@@ -364,6 +364,7 @@ class VodDetailViewModel @Inject constructor(
                 playbackManager.currentSeasonNumber = season.seasonNumber
                 playbackManager.currentEpisodeId = episode.id
                 playbackManager.currentEpisodeNumber = episode.episodeNumber
+                playbackManager.currentEpisodeName = episode.name
                 playbackManager.currentVideoId = fileId
                 playbackManager.currentItemId = item.id
                 playbackManager.currentItemType = "SERIES"

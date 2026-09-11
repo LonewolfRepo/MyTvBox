@@ -35,6 +35,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -51,6 +54,7 @@ import com.itv.blockbuster.ui.theme.BbAccent
 import com.itv.blockbuster.ui.theme.BbCard
 import com.itv.blockbuster.ui.theme.BbTextPrimary
 import com.itv.blockbuster.ui.theme.BbTextSecondary
+import com.itv.blockbuster.util.FocusRegistry
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -122,10 +126,27 @@ fun ChannelCarouselRow(
     favoriteIds: Set<String> = emptySet(),
     onChannelClick: (PortalChannel) -> Unit,
     onChannelLongClick: (PortalChannel) -> Unit,
-    onFavoriteIconClick: (PortalChannel) -> Unit = {}
+    onFavoriteIconClick: (PortalChannel) -> Unit = {},
+    // D-pad focus: when this is the screen's very first/top row, its first
+    // item is registered as the target FocusRegistry.notifyContentReady(route)
+    // shifts focus onto once the screen finishes loading. When this is the
+    // LAST row, its items block D-pad Down from escaping past the bottom of
+    // the content into the rail (see CarouselRow's isLastRow for the same
+    // fix elsewhere). When this is the top row, Up is pointed at
+    // upEscapeTarget (the screen's own top bar category filter) when
+    // provided, rather than relying on Compose's default spatial search -
+    // which was picking the rail instead, matching CarouselRow's fix.
+    route: String? = null,
+    isFirstRow: Boolean = false,
+    isLastRow: Boolean = false,
+    upEscapeTarget: FocusRequester? = null
 ) {
     val formFactor = rememberFormFactor()
     val collapsedMenuWidth = if (formFactor == FormFactor.MOBILE_PORTRAIT) 0.dp else 84.dp
+    val firstItemRequester = remember(route, isFirstRow) { FocusRequester() }
+    if (isFirstRow && route != null) {
+        FocusRegistry.registerFirstItem(route, firstItemRequester)
+    }
 
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(text = title, color = BbTextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 8.dp))
@@ -133,13 +154,36 @@ fun ChannelCarouselRow(
             data = channels, // FIX: renamed from 'items' to 'data'
             collapsedMenuWidth = collapsedMenuWidth,
             itemWidth = 160.dp,
-            itemSpacing = 12.dp
+            itemSpacing = 12.dp,
+            key = { it.id }
         ) { channel ->
+            val isFirstItem = isFirstRow && route != null && channel == channels.firstOrNull()
+            // D-pad focus: every channel (not just the first) gets a stable,
+            // registered requester keyed by (route, channel.id) - see
+            // FocusRegistry.registerItemFocus/restoreClickedItemFocus. This
+            // is what lets focus land back on the exact channel that was
+            // clicked when returning from the player via Back - see
+            // CarouselRow's itemFocusRequester for the same pattern.
+            val itemFocusRequester = remember(route, channel.id) { FocusRequester() }
+            if (route != null) {
+                FocusRegistry.registerItemFocus(route, channel.id, itemFocusRequester)
+            }
             ChannelTile(
                 channel = channel,
                 isFavorite = favoriteIds.contains(channel.id),
-                modifier = Modifier.width(160.dp),
-                onClick = { onChannelClick(channel) },
+                modifier = Modifier
+                    .width(160.dp)
+                    .focusRequester(itemFocusRequester)
+                    .then(if (isFirstItem) Modifier.focusRequester(firstItemRequester) else Modifier)
+                    .then(
+                        if (isLastRow) Modifier.focusProperties { down = FocusRequester.Cancel } else Modifier
+                    ).then(
+                        if (isFirstRow && upEscapeTarget != null) Modifier.focusProperties { up = upEscapeTarget } else Modifier
+                    ),
+                onClick = {
+                    if (route != null) FocusRegistry.rememberClickedItem(route, channel.id)
+                    onChannelClick(channel)
+                },
                 onLongClick = { onChannelLongClick(channel) },
                 onFavoriteIconClick = { onFavoriteIconClick(channel) }
             )

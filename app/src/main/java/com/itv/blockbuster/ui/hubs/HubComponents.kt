@@ -238,7 +238,8 @@ fun HubRowComposable(
             data = row.items, // FIX: renamed from 'items' to 'data'
             collapsedMenuWidth = collapsedMenuWidth,
             itemWidth = 140.dp,
-            itemSpacing = 12.dp
+            itemSpacing = 12.dp,
+            key = { it.id }
         ) { item ->
             HubCard(
                 item = item,

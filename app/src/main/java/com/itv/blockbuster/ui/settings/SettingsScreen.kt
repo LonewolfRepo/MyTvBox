@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -61,6 +62,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -72,6 +76,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.itv.blockbuster.ui.navigation.FormFactor
+import com.itv.blockbuster.ui.navigation.Routes
 import com.itv.blockbuster.ui.navigation.rememberFormFactor
 import com.itv.blockbuster.ui.theme.BbAccent
 import com.itv.blockbuster.ui.theme.BbBackground
@@ -82,6 +87,7 @@ import com.itv.blockbuster.ui.theme.BbTextMuted
 import com.itv.blockbuster.ui.theme.BbTextPrimary
 import com.itv.blockbuster.ui.theme.BbTextSecondary
 import com.itv.blockbuster.util.CategorySortItem
+import com.itv.blockbuster.util.FocusRegistry
 
 enum class SettingsMenu(val label: String, val icon: ImageVector, val destructive: Boolean = false) {
     REMEMBER_PROFILE("Remember Last Profile", Icons.Default.People),
@@ -103,12 +109,29 @@ private val ENGINE_OPTIONS = listOf("EXO", "VLC")
 private val TIMEZONE_OPTIONS = listOf("", "UTC", "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles", "Europe/London", "Europe/Paris", "Europe/Berlin", "Asia/Dubai", "Asia/Karachi", "Asia/Kolkata", "Asia/Shanghai", "Australia/Sydney")
 
 @Composable
-fun SettingsScreen(onOpenPortals: () -> Unit, onLogout: () -> Unit, viewModel: SettingsViewModel = hiltViewModel()) {
+fun SettingsScreen(
+    onOpenPortals: () -> Unit,
+    onLogout: () -> Unit,
+    viewModel: SettingsViewModel = hiltViewModel(),
+    // D-pad focus: this screen's route, used to hand focus off from the rail
+    // to its first item once content has loaded (see AppShell/FocusRegistry).
+    route: String = Routes.SETTINGS
+) {
     val state by viewModel.state.collectAsState()
     val notice by viewModel.notice.collectAsState()
     val isPortrait = rememberFormFactor() == FormFactor.MOBILE_PORTRAIT
     var selected by remember { mutableStateOf(SettingsMenu.REMEMBER_PROFILE) }
     var dialog by remember { mutableStateOf<String?>(null) }
+    // D-pad focus: the first menu row is the target FocusRegistry.notifyContentReady
+    // shifts focus onto once this screen is armed (on TV/landscape only - the
+    // menu list itself is static, so there's no "loading" state to wait for).
+    val firstMenuRequester = remember { FocusRequester() }
+    if (!isPortrait) {
+        FocusRegistry.registerFirstItem(route, firstMenuRequester)
+    }
+    LaunchedEffect(isPortrait) {
+        if (!isPortrait) FocusRegistry.notifyContentReady(route)
+    }
 
     Box(modifier = Modifier.fillMaxSize().background(BbBackground)) {
         if (isPortrait) MobileSettings(state, viewModel, onOpenPortals) { dialog = it }
@@ -116,8 +139,15 @@ fun SettingsScreen(onOpenPortals: () -> Unit, onLogout: () -> Unit, viewModel: S
             Row(modifier = Modifier.fillMaxSize()) {
                 LazyColumn(modifier = Modifier.weight(0.45f).fillMaxHeight().padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     item { Text("Profile & Settings", color = BbTextPrimary, fontSize = 24.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 12.dp)) }
-                    items(SettingsMenu.values().toList()) { menu ->
-                        MenuRow(menu, selected == menu) { selected = menu; handleMenuAction(menu, viewModel, onOpenPortals) { dialog = it } }
+                    itemsIndexed(SettingsMenu.values().toList()) { index, menu ->
+                        MenuRow(
+                            menu = menu,
+                            selected = selected == menu,
+                            focusRequester = if (index == 0) firstMenuRequester else null,
+                            isTopRow = index == 0,
+                            isBottomRow = index == SettingsMenu.values().size - 1,
+                            onClick = { selected = menu; handleMenuAction(menu, viewModel, onOpenPortals) { dialog = it } }
+                        )
                     }
                 }
                 Column(modifier = Modifier.weight(0.55f).fillMaxHeight().verticalScroll(rememberScrollState()).padding(24.dp)) {
@@ -158,9 +188,38 @@ private fun handleMenuAction(menu: SettingsMenu, viewModel: SettingsViewModel, o
 }
 
 @Composable
-private fun MenuRow(menu: SettingsMenu, selected: Boolean, onClick: () -> Unit) {
+private fun MenuRow(
+    menu: SettingsMenu,
+    selected: Boolean,
+    focusRequester: FocusRequester? = null,
+    // D-pad focus: this whole list is the leftmost (and only) column in
+    // Settings' left pane, so every row - not just the first - escapes to
+    // the rail on Left. isTopRow/isBottomRow block Up/Down from escaping to
+    // the rail at the top/bottom of the (short, non-scrolling) list, same as
+    // every other browser screen.
+    isTopRow: Boolean = false,
+    isBottomRow: Boolean = false,
+    onClick: () -> Unit
+) {
     var focused by remember { mutableStateOf(false) }
-    Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(50)).background(when { focused -> if (menu.destructive) BbDestructive else BbAccent; selected -> BbCard; else -> Color.Transparent }).then(if (focused) Modifier.border(2.dp, if (menu.destructive) BbDestructive else BbAccent, RoundedCornerShape(50)) else Modifier).clickable(onClick = onClick).focusable().onFocusChanged { focused = it.isFocused }.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(50))
+            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
+            .background(when { focused -> if (menu.destructive) BbDestructive else BbAccent; selected -> BbCard; else -> Color.Transparent })
+            .then(if (focused) Modifier.border(2.dp, if (menu.destructive) BbDestructive else BbAccent, RoundedCornerShape(50)) else Modifier)
+            .focusProperties {
+                left = FocusRegistry.leftEscapeTarget()
+                if (isTopRow) up = FocusRequester.Cancel
+                if (isBottomRow) down = FocusRequester.Cancel
+            }
+            .clickable(onClick = onClick)
+            .focusable()
+            .onFocusChanged { focused = it.isFocused }
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
         Icon(menu.icon, null, tint = when { focused -> BbTextPrimary; menu.destructive -> BbDestructive; else -> BbTextSecondary }, modifier = Modifier.size(22.dp))
         Spacer(Modifier.width(14.dp))
         Text(menu.label, color = if (menu.destructive && !focused) BbDestructive else BbTextPrimary, fontSize = 15.sp)

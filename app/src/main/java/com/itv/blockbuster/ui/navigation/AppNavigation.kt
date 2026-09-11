@@ -64,6 +64,7 @@ object Routes {
     val SETTINGS = AppSection.SETTINGS.route
     const val VOD_BROWSER = "vod_browser/{contentType}"
     const val VOD_DETAIL = "vod_detail/{itemId}/{contentType}"
+    const val VOD_EPISODES = "vod_episodes/{itemId}/{contentType}"
     const val PLAYER = "player/{streamUrl}/{channelId}/{videoId}"
     const val CATCHUP = "catchup/{channelId}"
     const val ADULT_LIVE_TV = "adult_live_tv"
@@ -195,77 +196,87 @@ fun AppNavigation(
         }
     }
 
-    NavHost(
-        navController = navController,
-        // CHANGE 2: when the picker is skipped, open the configured section directly
-        startDestination = if (startAtPicker) Routes.PROFILE_PICKER else landingRoute
-    ) {
-        // ... (Keep all existing composable routes exactly as they are) ...
-        composable(Routes.PROFILE_PICKER) {
-            ProfilePickerScreen(
-                onProfileSelected = {
-                    // CHANGE 3: land on the SELECTED profile's configured page
-                    scope.launch {
-                        val route = startupViewModel.awaitLandingRoute()
-                        navController.navigate(route) {
-                            popUpTo(Routes.PROFILE_PICKER) { inclusive = true }
+    // FIX: AppShell (the rail) now wraps the WHOLE NavHost exactly once, instead
+    // of being instantiated separately inside every composable(route) { } block
+    // below. That old per-destination-wrapper pattern meant every navigation
+    // created a brand-new AppShell/RailShell subtree - and since
+    // navigateToSection() uses the standard popUpTo(startDestination){saveState}
+    // + restoreState bottom-nav pattern, which always collapses the back stack
+    // down to [Home, target] and keeps the outgoing AND incoming destinations
+    // composed simultaneously for the crossfade, that meant a genuinely fresh
+    // "Home" RailShell instance was alive at the same moment as the real
+    // target's RailShell instance on every single tab switch. Both instances
+    // wrote to the same singleton FocusRegistry state (pendingContentFocusRoute
+    // in particular), and whichever one's LaunchedEffect happened to finish
+    // last won - which is exactly what caused the focus hand-off to
+    // intermittently get silently overwritten back to "home".
+    //
+    // With a single persistent RailShell for the app's lifetime, its
+    // LaunchedEffect(currentRoute) restarts exactly once per real navigation,
+    // with no possibility of a duplicate "ghost" instance racing it. AppShell
+    // decides internally (via NoRailRoutes) whether to actually render the
+    // rail for the current route - full-screen routes like the profile picker
+    // and video player render only their own content.
+    AppShell(navController) {
+        NavHost(
+            navController = navController,
+            // CHANGE 2: when the picker is skipped, open the configured section directly
+            startDestination = if (startAtPicker) Routes.PROFILE_PICKER else landingRoute
+        ) {
+            // ... (Keep all existing composable routes exactly as they are) ...
+            composable(Routes.PROFILE_PICKER) {
+                ProfilePickerScreen(
+                    onProfileSelected = {
+                        // CHANGE 3: land on the SELECTED profile's configured page
+                        scope.launch {
+                            val route = startupViewModel.awaitLandingRoute()
+                            navController.navigate(route) {
+                                popUpTo(Routes.PROFILE_PICKER) { inclusive = true }
+                            }
                         }
                     }
-                }
-            )
-        }
-        composable(Routes.HOME) {
-            AppShell(navController) {
-                HomeScreen(
-                    onOpenPortals = { navController.navigateToSection(Routes.SERVERS) },
-                    onOpenVodDetail = { itemId, type -> navController.navigate("vod_detail/$itemId/$type") }
                 )
             }
-        }
-        // FIX: Movies explicitly passes "vod" contentType
-        composable(Routes.MOVIES) {
-            AppShell(navController) {
+            composable(Routes.HOME) {
+                HomeScreen(
+                    onOpenPortals = { navController.navigateToSection(Routes.SERVERS) },
+                    onOpenVodDetail = { itemId, type -> navController.navigate("vod_detail/$itemId/$type") },
+                    route = Routes.HOME
+                )
+            }
+            // FIX: Movies explicitly passes "vod" contentType
+            composable(Routes.MOVIES) {
                 VodBrowserScreen(
                     contentType = "vod",
                     onOpenDetail = { itemId -> navController.navigate("vod_detail/$itemId/vod") }
                 )
             }
-        }
-        // FIX: TV Shows explicitly passes "series" contentType
-        composable(Routes.TV_SHOWS) {
-            AppShell(navController) {
+            // FIX: TV Shows explicitly passes "series" contentType
+            composable(Routes.TV_SHOWS) {
                 VodBrowserScreen(
                     contentType = "series",
                     onOpenDetail = { itemId -> navController.navigate("vod_detail/$itemId/series") }
                 )
             }
-        }
-        composable(Routes.LIVE_TV) {
-            AppShell(navController) {
+            composable(Routes.LIVE_TV) {
                 LiveTvScreen(
                     onPlayChannel = { url, channelId -> navController.navigate("player/${encodeUrl(url)}/$channelId/none") },
                     onOpenCatchup = { channelId -> navController.navigate("catchup/$channelId") }
                 )
             }
-        }
-        composable(Routes.TV_GUIDE) {
-            AppShell(navController) {
+            composable(Routes.TV_GUIDE) {
                 TvGuideScreen(
                     onPlayLive = { url, channelId -> navController.navigate("player/${encodeUrl(url)}/$channelId/none") },
                     onOpenCatchup = { channelId -> navController.navigate("catchup/$channelId") }
                 )
             }
-        }
-        composable(
-            route = Routes.CATCHUP,
-            arguments = listOf(navArgument("channelId") { type = NavType.StringType })
-        ) {
-            AppShell(navController) {
+            composable(
+                route = Routes.CATCHUP,
+                arguments = listOf(navArgument("channelId") { type = NavType.StringType })
+            ) {
                 CatchupScreen(onPlay = { url -> navController.navigate("player/${encodeUrl(url)}/none/none") })
             }
-        }
-        composable(Routes.MY_LIST) {
-            AppShell(navController) {
+            composable(Routes.MY_LIST) {
                 FavoritesHubScreen(
                     onPlayLive = { url, channelId ->
                         navController.navigate("player/${encodeUrl(url)}/$channelId/none")
@@ -275,9 +286,7 @@ fun AppNavigation(
                     }
                 )
             }
-        }
-        composable(Routes.RECENT) {
-            AppShell(navController) {
+            composable(Routes.RECENT) {
                 RecentsHubScreen(
                     onPlayLive = { url, channelId ->
                         navController.navigate("player/${encodeUrl(url)}/$channelId/none")
@@ -287,17 +296,13 @@ fun AppNavigation(
                     }
                 )
             }
-        }
-        composable(Routes.ADULT) {
-            AppShell(navController) {
+            composable(Routes.ADULT) {
                 AdultHubScreen(
                     onNavigateToLive = { navController.navigate(Routes.ADULT_LIVE_TV) },
                     onNavigateToVod = { navController.navigate(Routes.ADULT_VOD_BROWSER) }
                 )
             }
-        }
-        composable(Routes.ADULT_LIVE_TV) {
-            AppShell(navController) {
+            composable(Routes.ADULT_LIVE_TV) {
                 // FIX: Guard against the password prompt being bypassed. Because Adult
                 // uses the same save/restoreState bottom-nav pattern as the other tabs,
                 // navigating away and back can restore this destination directly
@@ -311,49 +316,46 @@ fun AppNavigation(
                     )
                 }
             }
-        }
-        // FIX: Switched from HomeScreen to VodBrowserScreen to prevent lifecycle freezing
-        // and to provide a consistent carousel UI for Adult VOD matching the Movies section.
-        composable(Routes.ADULT_VOD_BROWSER) {
-            AppShell(navController) {
+            // FIX: Switched from HomeScreen to VodBrowserScreen to prevent lifecycle freezing
+            // and to provide a consistent carousel UI for Adult VOD matching the Movies section.
+            composable(Routes.ADULT_VOD_BROWSER) {
                 // FIX: same unlock gate as Adult Live TV above - see comment there.
                 AdultGate(navController, adultSessionManager, Routes.ADULT_VOD_BROWSER) {
                     HomeScreen(
                         onOpenPortals = { navController.navigateToSection(Routes.SERVERS) },
-                        onOpenVodDetail = { itemId, type -> navController.navigate("vod_detail/$itemId/$type") }
+                        onOpenVodDetail = { itemId, type -> navController.navigate("vod_detail/$itemId/$type") },
+                        route = Routes.ADULT_VOD_BROWSER
                     )
                 }
             }
-        }
-        composable(
-            route = Routes.PLAYER,
-            arguments = listOf(
-                navArgument("streamUrl") { type = NavType.StringType },
-                navArgument("channelId") { type = NavType.StringType; defaultValue = "none" },
-                navArgument("videoId") { type = NavType.StringType; defaultValue = "none" }
-            )
-        ) { backStackEntry ->
-            val encodedUrl = backStackEntry.arguments?.getString("streamUrl") ?: ""
-            val decodedUrl = try {
-                java.net.URLDecoder.decode(encodedUrl, "UTF-8")
-            } catch (e: Exception) { encodedUrl }
-            val channelId = backStackEntry.arguments?.getString("channelId") ?: "none"
-            val videoId = backStackEntry.arguments?.getString("videoId") ?: "none"
-            PlayerScreen(
-                streamUrl = decodedUrl,
-                channelId = channelId,
-                videoId = videoId,
-                onBack = { navController.popBackStack() }
-            )
-        }
-        composable(Routes.SERVERS) {
-            AppShell(navController) { ServersScreen() }
-        }
-        composable(Routes.SEARCH) {
-            AppShell(navController) { SectionPlaceholder(AppSection.SEARCH) }
-        }
-        composable(Routes.SETTINGS) {
-            AppShell(navController) {
+            composable(
+                route = Routes.PLAYER,
+                arguments = listOf(
+                    navArgument("streamUrl") { type = NavType.StringType },
+                    navArgument("channelId") { type = NavType.StringType; defaultValue = "none" },
+                    navArgument("videoId") { type = NavType.StringType; defaultValue = "none" }
+                )
+            ) { backStackEntry ->
+                val encodedUrl = backStackEntry.arguments?.getString("streamUrl") ?: ""
+                val decodedUrl = try {
+                    java.net.URLDecoder.decode(encodedUrl, "UTF-8")
+                } catch (e: Exception) { encodedUrl }
+                val channelId = backStackEntry.arguments?.getString("channelId") ?: "none"
+                val videoId = backStackEntry.arguments?.getString("videoId") ?: "none"
+                PlayerScreen(
+                    streamUrl = decodedUrl,
+                    channelId = channelId,
+                    videoId = videoId,
+                    onBack = { navController.popBackStack() }
+                )
+            }
+            composable(Routes.SERVERS) {
+                ServersScreen()
+            }
+            composable(Routes.SEARCH) {
+                SectionPlaceholder(AppSection.SEARCH)
+            }
+            composable(Routes.SETTINGS) {
                 SettingsScreen(
                     onOpenPortals = { navController.navigateToSection(Routes.SERVERS) },
                     onLogout = {
@@ -363,9 +365,7 @@ fun AppNavigation(
                     }
                 )
             }
-        }
-        composable(Routes.PROFILE_HUB) {
-            AppShell(navController) {
+            composable(Routes.PROFILE_HUB) {
                 ProfileHubScreen(
                     onOpenProfilePicker = { navController.navigate(Routes.PROFILE_PICKER) },
                     onOpenSettings = { navController.navigateToSection(Routes.SETTINGS) },
@@ -384,17 +384,15 @@ fun AppNavigation(
                     }
                 )
             }
-        }
-        composable(
-            route = Routes.VOD_DETAIL,
-            arguments = listOf(
-                navArgument("itemId") { type = NavType.StringType },
-                navArgument("contentType") { type = NavType.StringType }
-            )
-        ) { backStackEntry ->
-            val contentType = backStackEntry.arguments?.getString("contentType") ?: "vod"
-            val itemId = backStackEntry.arguments?.getString("itemId") ?: ""
-            AppShell(navController) {
+            composable(
+                route = Routes.VOD_DETAIL,
+                arguments = listOf(
+                    navArgument("itemId") { type = NavType.StringType },
+                    navArgument("contentType") { type = NavType.StringType }
+                )
+            ) { backStackEntry ->
+                val contentType = backStackEntry.arguments?.getString("contentType") ?: "vod"
+                val itemId = backStackEntry.arguments?.getString("itemId") ?: ""
                 VodDetailScreen(
                     onPlay = { url -> navController.navigate("player/${encodeUrl(url)}/none/none") },
                     onOpenEpisodes = {
@@ -402,15 +400,13 @@ fun AppNavigation(
                     }
                 )
             }
-        }
-        composable(
-            route = "vod_episodes/{itemId}/{contentType}",
-            arguments = listOf(
-                navArgument("itemId") { type = NavType.StringType },
-                navArgument("contentType") { type = NavType.StringType }
-            )
-        ) {
-            AppShell(navController) {
+            composable(
+                route = Routes.VOD_EPISODES,
+                arguments = listOf(
+                    navArgument("itemId") { type = NavType.StringType },
+                    navArgument("contentType") { type = NavType.StringType }
+                )
+            ) {
                 VodEpisodesScreen(
                     onPlay = { url -> navController.navigate("player/${encodeUrl(url)}/none/none") },
                     onBack = { navController.popBackStack() }

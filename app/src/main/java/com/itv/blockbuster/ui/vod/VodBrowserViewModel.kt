@@ -150,18 +150,20 @@ class VodBrowserViewModel @Inject constructor(
             val orderKey = if (_contentType == "series") "order_series" else "order_vod"
             val rawOrder = settings.getString(profileId, serverId, orderKey, "")
             val ordered = CategorySortHelper.applyToCategories(masterCats, rawOrder)
-            val filteredOrdered = ordered.filter { it.id != "*" && it.id != "0" }
+            // FIX: strip censored categories from the visible list, not just the "*"/"0" placeholders
+            val uncensoredOrdered = ordered.filter { !it.isCensored }
+            val filteredOrdered = uncensoredOrdered.filter { it.id != "*" && it.id != "0" }
             val uncensoredGenres = masterGenres.filter { !it.isCensored }
             _allCategories.value = filteredOrdered
             val initialBatch = filteredOrdered.take(5)
             _visibleCategories.value = initialBatch
             _hasMoreCategories.value = filteredOrdered.size > 5
-            val defaultCat = ordered.firstOrNull { it.id == "*" || it.id == "0" } ?: ordered.firstOrNull()
+            val defaultCat = uncensoredOrdered.firstOrNull { it.id == "*" || it.id == "0" } ?: uncensoredOrdered.firstOrNull()
             val allGenre = PortalCategory(id = "*", title = "All Genres", alias = "all", isCensored = false)
             val genresWithAll = listOf(allGenre) + uncensoredGenres
             _state.update {
                 it.copy(
-                    categories = ordered,
+                    categories = uncensoredOrdered,
                     selectedCategory = defaultCat,
                     genres = genresWithAll,
                     selectedGenre = allGenre,

@@ -23,7 +23,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -55,6 +55,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
@@ -83,6 +84,7 @@ import com.itv.blockbuster.ui.theme.BbSurface
 import com.itv.blockbuster.ui.theme.BbTextMuted
 import com.itv.blockbuster.ui.theme.BbTextPrimary
 import com.itv.blockbuster.ui.theme.BbTextSecondary
+import com.itv.blockbuster.util.FocusRegistry
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -113,6 +115,13 @@ fun TvGuideScreen(
     val configuration = LocalConfiguration.current
     val dropdownWidth = (configuration.screenWidthDp.dp * 0.28f)
     val context = LocalContext.current
+
+    // D-pad focus: explicit Up target for the first (topmost) channel row,
+    // pointing at this screen's own top bar (category filter dropdown)
+    // rather than relying on Compose's default spatial search - see
+    // HomeScreen/VodBrowserScreen/LiveTvScreen for the same fix and
+    // rationale.
+    val topBarFocusRequester = remember { FocusRequester() }
 
     // React to fullscreen enter/exit so the PIP surface is (re)bound safely
     val fullscreenActive by viewModel.playbackManager.isFullscreenActiveFlow.collectAsState()
@@ -300,7 +309,8 @@ fun TvGuideScreen(
                     CategoryDropdown(
                         categories = state.categories,
                         selectedCategory = state.selectedCategory,
-                        onCategorySelected = { viewModel.selectCategory(it) }
+                        onCategorySelected = { viewModel.selectCategory(it) },
+                        focusRequester = topBarFocusRequester
                     )
                 }
             }
@@ -423,8 +433,7 @@ fun TvGuideScreen(
                 }
                 else -> {
                     LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
-                        items(guideChannels, key = { it.id }) { channel ->
-                            val index = guideChannels.indexOf(channel)
+                        itemsIndexed(guideChannels, key = { _, channel -> channel.id }) { index, channel ->
                             GuideChannelRow(
                                 index = index,
                                 channel = channel,
@@ -435,6 +444,9 @@ fun TvGuideScreen(
                                 channelCol = channelCol,
                                 isPreviewing = state.previewChannel?.id == channel.id,
                                 requestInitialFocus = channel.id == state.lastPlayedChannelId,
+                                isBottomRow = index == guideChannels.lastIndex,
+                                isTopRow = index == 0,
+                                upEscapeTarget = if (!isPortrait) topBarFocusRequester else null,
                                 onChannelClick = {
                                     // CLICK ON CHANNEL CURRENTLY PLAYING -> FULLSCREEN
                                     if (state.previewChannel?.id == channel.id &&
@@ -500,6 +512,17 @@ private fun GuideChannelRow(
     channelCol: Dp,
     isPreviewing: Boolean,
     requestInitialFocus: Boolean,
+    // D-pad focus: the channel cell is always the leftmost item in every row
+    // (a vertical list of rows, not a single boundary row), so every row's
+    // cell - not just the first - escapes to the rail on Left. isBottomRow
+    // blocks Down from escaping to the rail at the very bottom of the
+    // channel list, same as every other browser screen. When this is the
+    // top row, Up is pointed at upEscapeTarget (the screen's own top bar
+    // category filter) when provided, rather than relying on Compose's
+    // default spatial search - which was picking the rail instead.
+    isBottomRow: Boolean,
+    isTopRow: Boolean = false,
+    upEscapeTarget: FocusRequester? = null,
     onChannelClick: () -> Unit,
     onProgramClick: (EpgProgram) -> Unit
 ) {
@@ -528,6 +551,11 @@ private fun GuideChannelRow(
                     if (channelFocused) Modifier.border(2.dp, BbAccent, RoundedCornerShape(6.dp))
                     else Modifier
                 )
+                .focusProperties {
+                    left = FocusRegistry.leftEscapeTarget()
+                    if (isBottomRow) down = FocusRequester.Cancel
+                    if (isTopRow && upEscapeTarget != null) up = upEscapeTarget
+                }
                 .clickable(onClick = onChannelClick)
                 .focusRequester(channelFocusRequester)
                 .focusable()
@@ -584,7 +612,9 @@ private fun GuideChannelRow(
                         .offset(x = x)
                         .width(w)
                         .fillMaxHeight()
-                        .padding(vertical = 4.dp, horizontal = 2.dp),
+                        .padding(vertical = 4.dp, horizontal = 2.dp)
+                        .then(if (isBottomRow) Modifier.focusProperties { down = FocusRequester.Cancel } else Modifier)
+                        .then(if (isTopRow && upEscapeTarget != null) Modifier.focusProperties { up = upEscapeTarget } else Modifier),
                     onClick = { onProgramClick(program) }
                 )
             }
@@ -654,7 +684,8 @@ private fun SortIconButton(mode: SortMode, onClick: () -> Unit) {
 private fun CategoryDropdown(
     categories: List<PortalCategory>,
     selectedCategory: PortalCategory?,
-    onCategorySelected: (PortalCategory) -> Unit
+    onCategorySelected: (PortalCategory) -> Unit,
+    focusRequester: FocusRequester? = null
 ) {
     var expanded by remember { mutableStateOf(false) }
     var isFocused by remember { mutableStateOf(false) }
@@ -665,6 +696,7 @@ private fun CategoryDropdown(
                 .clip(RoundedCornerShape(8.dp))
                 .background(if (isFocused) BbAccent.copy(alpha = 0.1f) else BbCard)
                 .then(if (isFocused) Modifier.border(2.dp, BbAccent, RoundedCornerShape(8.dp)) else Modifier)
+                .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
                 .clickable { expanded = true }
                 .focusable()
                 .onFocusChanged { isFocused = it.isFocused }

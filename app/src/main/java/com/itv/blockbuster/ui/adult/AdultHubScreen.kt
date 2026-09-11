@@ -33,6 +33,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
@@ -45,6 +47,7 @@ import com.itv.blockbuster.ui.theme.BbBackground
 import com.itv.blockbuster.ui.theme.BbCard
 import com.itv.blockbuster.ui.theme.BbTextPrimary
 import com.itv.blockbuster.ui.theme.BbTextSecondary
+import com.itv.blockbuster.util.FocusRegistry
 
 @Composable
 fun AdultHubScreen(
@@ -107,8 +110,8 @@ fun AdultHubScreen(
                 Text("Adult Content", color = BbAccent, fontSize = 28.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(32.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-                    AdultMenuCard(icon = Icons.Default.LiveTv, title = "Adult Live", onClick = onNavigateToLive)
-                    AdultMenuCard(icon = Icons.Default.Movie, title = "Adult VOD", onClick = onNavigateToVod)
+                    AdultMenuCard(icon = Icons.Default.LiveTv, title = "Adult Live", isLeftmost = true, onClick = onNavigateToLive)
+                    AdultMenuCard(icon = Icons.Default.Movie, title = "Adult VOD", isLeftmost = false, onClick = onNavigateToVod)
                 }
             }
         }
@@ -116,10 +119,25 @@ fun AdultHubScreen(
 }
 
 @Composable
-private fun AdultMenuCard(icon: ImageVector, title: String, onClick: () -> Unit) {
+private fun AdultMenuCard(
+    icon: ImageVector,
+    title: String,
+    // D-pad focus: only the leftmost card escapes to the rail on Left. Both
+    // cards sit in the screen's only row, so both are simultaneously the top
+    // AND bottom row - Up/Down are blocked from escaping to the rail on
+    // either, same as every other browser screen's boundary rows.
+    isLeftmost: Boolean,
+    onClick: () -> Unit
+) {
     Column(
         modifier = Modifier.width(200.dp).height(200.dp).clip(RoundedCornerShape(16.dp)).background(BbCard)
-            .border(2.dp, BbAccent.copy(alpha = 0.3f), RoundedCornerShape(16.dp)).clickable(onClick = onClick).padding(16.dp),
+            .border(2.dp, BbAccent.copy(alpha = 0.3f), RoundedCornerShape(16.dp))
+            .focusProperties {
+                if (isLeftmost) left = FocusRegistry.leftEscapeTarget()
+                up = FocusRequester.Cancel
+                down = FocusRequester.Cancel
+            }
+            .clickable(onClick = onClick).padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center
     ) {
         Icon(icon, contentDescription = title, tint = BbAccent, modifier = Modifier.size(64.dp))

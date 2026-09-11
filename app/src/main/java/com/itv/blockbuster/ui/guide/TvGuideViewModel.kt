@@ -2,6 +2,7 @@ package com.itv.blockbuster.ui.guide
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.itv.blockbuster.data.local.SettingsRepository
 import com.itv.blockbuster.data.local.UserPreferencesRepository
 import com.itv.blockbuster.data.player.PlaybackManager
 import com.itv.blockbuster.data.repository.ConnectionRepository
@@ -14,6 +15,7 @@ import com.itv.blockbuster.domain.model.EpgProgram
 import com.itv.blockbuster.domain.model.PortalCategory
 import com.itv.blockbuster.domain.model.PortalChannel
 import com.itv.blockbuster.domain.model.PortalPage
+import com.itv.blockbuster.util.LiveTvCategoryFilter
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -50,6 +52,7 @@ class TvGuideViewModel @Inject constructor(
     private val recentRepository: RecentRepository,
     private val connectionRepository: ConnectionRepository, // NEW
     private val serverRepository: ServerRepository,         // NEW
+    private val settings: SettingsRepository,
     private val prefs: UserPreferencesRepository,
     private val sessionManager: StalkerSessionManager,
     val playbackManager: PlaybackManager,
@@ -110,24 +113,25 @@ class TvGuideViewModel @Inject constructor(
         _uiState.update { it.copy(isLoading = true) }
         val allCats = liveTvRepository.getCategories().getOrDefault(emptyList())
         val isAdult = adultSessionManager.isAdultMode.value
-
-        val censoredCategoryIds = allCats.filter { it.isCensored }.map { it.id }.toSet()
-        //val cats = allCats.filter { !it.isCensored }
-
-        // NEW: Invert category filter for Adult mode
-        val cats = allCats.filter { it.isCensored == isAdult }
-
-        // Filter out channels belonging to censored categories
-        val allChannels = liveTvRepository.getAllChannels().getOrDefault(PortalPage(emptyList(), 0)).items
-            .filter { if (isAdult) it.genreId in censoredCategoryIds else it.genreId !in censoredCategoryIds }
-
-        val default = cats.firstOrNull { it.id == "*" || it.id == "0" || it.id == "all" } ?: cats.firstOrNull()
-        val isAll = default == null || default.id == "*" || default.id == "0" || default.id == "all"
-        val filteredChannels = if (isAll) allChannels else allChannels.filter { it.genreId == default?.id }
-        // Resolve last played live channel — active playback session first,
-        // then the most recent LIVE entry from Recents (survives app restarts).
+        val allChannelsRaw = liveTvRepository.getAllChannels().getOrDefault(PortalPage(emptyList(), 0)).items
         val p = prefs.activeProfileIdFlow.first()
         val s = sessionManager.activePortal.value?.serverId ?: 0
+        val rawOrder = settings.getString(p, s, "order_live", "")
+
+        // FIX: previously the Guide computed its own category list here - filtered
+        // by adult/censored only, with no sorting and no respect for categories the
+        // user had hidden in Settings -> Content Settings -> Live TV. It now shares
+        // the exact same sort/filter logic Live TV uses (LiveTvCategoryFilter, keyed
+        // off the same "order_live" setting), so the Guide's category dropdown and
+        // channel list always match Live TV exactly.
+        val result = LiveTvCategoryFilter.apply(allCats, allChannelsRaw, isAdult, rawOrder)
+        adultSessionManager.updateCensoredCategories(result.censoredCategoryIds)
+
+        val default = result.allCategory
+        val allChannels = result.channels
+        val filteredChannels = allChannels
+        // Resolve last played live channel — active playback session first,
+        // then the most recent LIVE entry from Recents (survives app restarts).
         val sessionChannelId = playbackManager.currentChannel?.id
         val recentChannelId = recentRepository.getRecents(p, s)
             .first()
@@ -138,7 +142,7 @@ class TvGuideViewModel @Inject constructor(
         _uiState.update {
             it.copy(
                 isLoading = false,
-                categories = cats,
+                categories = result.categories,
                 selectedCategory = default,
                 allChannels = allChannels,
                 channels = filteredChannels,

@@ -13,7 +13,7 @@ import com.itv.blockbuster.data.session.StalkerSessionManager
 import com.itv.blockbuster.domain.model.PortalCategory
 import com.itv.blockbuster.domain.model.PortalChannel
 import com.itv.blockbuster.domain.model.PortalPage
-import com.itv.blockbuster.util.CategorySortHelper
+import com.itv.blockbuster.util.LiveTvCategoryFilter
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -96,34 +96,26 @@ class LiveTvViewModel @Inject constructor(
     private suspend fun load() {
         _uiState.update { it.copy(isLoading = true) }
         val allCats = liveTvRepository.getCategories().getOrDefault(emptyList())
-
-        // FIX: Push censored category IDs to global registry
-        val censoredCategoryIds = allCats.filter { it.isCensored }.map { it.id }.toSet()
-        adultSessionManager.updateCensoredCategories(censoredCategoryIds)
-
         val isAdult = adultSessionManager.isAdultMode.value
-        val cats = allCats.filter { it.isCensored == isAdult }
         val allRaw = liveTvRepository.getAllChannels().getOrDefault(PortalPage(emptyList(), 0)).items
-        val all = allRaw.filter {
-            if (isAdult) it.genreId in censoredCategoryIds
-            else it.genreId !in censoredCategoryIds
-        }
         val p = prefs.activeProfileIdFlow.first()
         val s = sessionManager.activePortal.value?.serverId ?: 0
         val rawOrder = settings.getString(p, s, "order_live", "")
-        val ordered = CategorySortHelper.applyToCategories(cats, rawOrder)
-        val orderedIds = ordered.map { it.id }.toSet()
-        val missingCats = cats.filter { it.id !in orderedIds && it.id != "*" && it.id != "0" && it.id != "all" }
-        val finalCats = ordered + missingCats
-        val allCat = PortalCategory(id = "*", title = "All Categories", alias = "all", isCensored = isAdult)
-        val categoriesWithAll = listOf(allCat) + finalCats
+
+        // Shared with TvGuideViewModel so Live TV and the TV Guide's category
+        // filter/sort always match the Live TV Content Settings exactly.
+        val result = LiveTvCategoryFilter.apply(allCats, allRaw, isAdult, rawOrder)
+
+        // FIX: Push censored category IDs to global registry
+        adultSessionManager.updateCensoredCategories(result.censoredCategoryIds)
+
         _uiState.update {
             it.copy(
                 isLoading = false,
-                categories = categoriesWithAll,
-                selectedCategory = allCat,
-                allChannels = all,
-                channels = all
+                categories = result.categories,
+                selectedCategory = result.allCategory,
+                allChannels = result.channels,
+                channels = result.channels
             )
         }
     }
