@@ -1,6 +1,8 @@
 package com.itv.blockbuster.ui.shell
 
+import android.app.Activity
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
@@ -40,6 +42,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -52,6 +55,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -111,25 +115,44 @@ private val NoRailRoutes = setOf(
 
 /**
  * Routes reached as a "detour" from a browser item click - a VOD poster
- * opening detail/episodes, or a channel/poster opening playback directly -
- * rather than by clicking a rail item. Used by AppShell to detect, on every
- * route change, whether we're landing on a chrome-visible route because we
- * just came from one of these - that detection lives in FocusRegistry (a
+ * opening detail/episodes, a channel/poster opening playback directly, or
+ * the Adult hub's Live/VOD cards opening their own browser screens - rather
+ * than by clicking a rail item. Used by AppShell to detect, on every route
+ * change, whether we're landing on a chrome-visible route because we just
+ * came from one of these - that detection lives in FocusRegistry (a
  * process-wide singleton) rather than a composable's local remembered
  * state, so it survives regardless of which shell composable happens to be
  * mounted (or, historically, disposed and recreated) at any given moment.
  * When true, RailShell arms the focus-restoration path
  * (FocusRegistry.armRestoreFocus/restoreClickedItemFocus) instead of the
  * usual rail-focus-then-first-item handoff, so focus lands back on the
- * exact browser item that was clicked to start the detour - whether that
- * detour was one hop (a channel straight into Player) or two (a VOD poster
- * into its detail screen, then Play into Player).
+ * exact browser item (or Adult Live/VOD card) that was clicked to start the
+ * detour - whether that detour was one hop (a channel straight into
+ * Player) or two (a VOD poster into its detail screen, then Play into
+ * Player).
  *
  * Deliberately excludes Routes.PROFILE_PICKER: returning from there is a
  * profile switch, not "back to what I was just looking at", so the normal
  * rail-focus-then-first-item handoff is what's wanted.
  */
-private val DetourRoutes = setOf(Routes.VOD_DETAIL, Routes.VOD_EPISODES, Routes.PLAYER, Routes.CATCHUP)
+private val DetourRoutes = setOf(
+    Routes.VOD_DETAIL, Routes.VOD_EPISODES, Routes.PLAYER, Routes.CATCHUP,
+    Routes.ADULT_LIVE_TV, Routes.ADULT_VOD_BROWSER
+)
+
+/**
+ * Routes where Back should behave like ordinary navigation - popping the
+ * back stack - rather than RailShell's usual redirect-to-rail, even though
+ * (unlike NoRailRoutes) the rail chrome stays visible here: Adult Live/VOD
+ * are full browser screens in their own right (channel grids, VOD
+ * carousels), so hiding the rail would be inconsistent with Home/Movies/
+ * Live TV, but per the requirement, Back from either should return to the
+ * Adult hub's Live/VOD selection screen, not just refocus the rail while
+ * staying put. VOD_DETAIL/EPISODES/PLAYER/CATCHUP don't need a separate
+ * entry here since showChrome (false for all of them, being NoRailRoutes)
+ * already disables the BackHandler entirely.
+ */
+private val BackPopsToParentRoutes = setOf(Routes.ADULT_LIVE_TV, Routes.ADULT_VOD_BROWSER)
 
 @Composable
 fun AppShell(
@@ -410,6 +433,18 @@ private fun RailShell(
         }
     }
 
+    // NEW: two rapid Back presses (within 2s) from any browser page or the
+    // rail menu exits the app outright, matching the "Home button
+    // terminates, doesn't minimize" behavior in MainActivity for
+    // consistency - rather than just leaving the user bounced back to the
+    // rail with no way to actually leave via Back. lastBackPressTime is a
+    // plain remember{} (not rememberSaveable) - safe since RailShell now
+    // stays mounted continuously for the whole session (see showChrome/
+    // content() call-site-stability fix above), so it's never reset
+    // out from under this by an unrelated navigation.
+    val context = LocalContext.current
+    var lastBackPressTime by remember { mutableLongStateOf(0L) }
+
     // FIX: Back button, or D-pad Left from the leftmost item in the content
     // area (see NetflixStyleCarousel), returns focus to the rail instead of
     // popping the back stack - landing on whichever rail item was last
@@ -441,12 +476,24 @@ private fun RailShell(
     // popping the back stack - which is exactly what happens when this
     // handler is disabled, removing it from the dispatcher's active set
     // entirely and letting NavHost's own (earlier-registered) back handling
-    // take over. No longer needs a separate DetourRoutes check here - every
-    // route in that set is also in NoRailRoutes, so showChrome alone
-    // already covers it.
-    BackHandler(enabled = showChrome) {
-        Log.d(TAG, "RailShell: Back pressed - returning focus to rail (railExpanded=$railExpanded)")
-        FocusRegistry.focusRail()
+    // take over.
+    //
+    // ALSO disabled on BackPopsToParentRoutes (Adult Live/VOD): these keep
+    // the rail visible (showChrome stays true), but per the requirement,
+    // Back from either should pop back to the Adult hub's selection screen
+    // rather than just refocus the rail while staying put.
+    BackHandler(enabled = showChrome && currentRoute !in BackPopsToParentRoutes) {
+        val now = System.currentTimeMillis()
+        if (now - lastBackPressTime < 2000L) {
+            Log.d(TAG, "RailShell: rapid double Back - exiting app")
+            (context as? Activity)?.finishAndRemoveTask()
+            android.os.Process.killProcess(android.os.Process.myPid())
+        } else {
+            lastBackPressTime = now
+            Toast.makeText(context, "Press back again to exit", Toast.LENGTH_SHORT).show()
+            Log.d(TAG, "RailShell: Back pressed - returning focus to rail (railExpanded=$railExpanded)")
+            FocusRegistry.focusRail()
+        }
     }
 }
 

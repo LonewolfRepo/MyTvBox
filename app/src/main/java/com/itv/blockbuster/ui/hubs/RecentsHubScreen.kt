@@ -102,6 +102,22 @@ fun RecentsHubScreen(
     // attempting to focus it.
     val listState = rememberLazyListState()
 
+    // D-pad focus: hoisted per-SECTION scroll states (each section's own
+    // horizontal NetflixStyleCarousel), separate from the outer LazyColumn's
+    // listState above. Needed specifically because Recents re-sorts an item
+    // to the FRONT of its section the moment it's played - if that row's
+    // own horizontal scroll position was left showing later items (e.g. the
+    // user had scrolled right before clicking something further along),
+    // the promoted item at index 0 falls outside the LazyRow's composed
+    // range and never gets laid out, so restoreClickedItemFocus below can
+    // never find a live FocusRequester for it no matter how long it
+    // retries. Scrolling each row back to index 0 before attempting the
+    // restore guarantees the front item - which recently-played items
+    // always become - is actually composed.
+    val liveRowState = rememberLazyListState()
+    val moviesRowState = rememberLazyListState()
+    val seriesRowState = rememberLazyListState()
+
     // Sections render in this order (Live TV, Movies, TV Shows) - whichever
     // is non-empty first is the one whose first item receives initial focus.
     val firstSection = when {
@@ -133,12 +149,32 @@ fun RecentsHubScreen(
     // was clicked - no-ops unless RailShell's route-change handling armed
     // this route for restoration (see FocusRegistry.armRestoreFocus/
     // restoreClickedItemFocus and AppShell.kt).
+    //
+    // FIX: scroll all three section rows back to index 0 FIRST, before
+    // attempting the restore. Recents re-sorts whatever was just played to
+    // the FRONT of its section - if that row's own horizontal scroll
+    // position was left showing later items, the promoted item at index 0
+    // falls outside the LazyRow's composed range and is never laid out, so
+    // no FocusRequester for it exists yet no matter how long
+    // restoreClickedItemFocus retries. scrollToItem(0) is an instant jump
+    // (not animated), so this doesn't produce a visible scroll animation
+    // before the focus lands - if the clicked item wasn't actually
+    // promoted (e.g. just viewed, not played), it's still found wherever
+    // it already was since these scrolls only affect what's laid out, not
+    // which item restoreClickedItemFocus looks for.
     val lifecycleOwner = LocalLifecycleOwner.current
     val focusRestoreScope = rememberCoroutineScope()
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                focusRestoreScope.launch { FocusRegistry.restoreClickedItemFocus(route) }
+                focusRestoreScope.launch {
+                    if (FocusRegistry.awaitPendingRestore(route)) {
+                        liveRowState.scrollToItem(0)
+                        moviesRowState.scrollToItem(0)
+                        seriesRowState.scrollToItem(0)
+                    }
+                    FocusRegistry.restoreClickedItemFocus(route)
+                }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -171,6 +207,7 @@ fun RecentsHubScreen(
                             collapsedMenuWidth = collapsedMenuWidth,
                             itemWidth = 160.dp,
                             itemSpacing = 12.dp,
+                            state = liveRowState,
                             key = { it.id }
                         ) { channel ->
                             val isFirstItem = firstSection == "live" && channel == liveChannels.firstOrNull()
@@ -240,6 +277,7 @@ fun RecentsHubScreen(
                             collapsedMenuWidth = collapsedMenuWidth,
                             itemWidth = 140.dp,
                             itemSpacing = 12.dp,
+                            state = moviesRowState,
                             key = { it.id }
                         ) { item ->
                             val isFirstItem = firstSection == "movies" && item == movieItems.firstOrNull()
@@ -315,6 +353,7 @@ fun RecentsHubScreen(
                             collapsedMenuWidth = collapsedMenuWidth,
                             itemWidth = 140.dp,
                             itemSpacing = 12.dp,
+                            state = seriesRowState,
                             key = { it.id }
                         ) { item ->
                             val isFirstItem = firstSection == "series" && item == seriesItems.firstOrNull()

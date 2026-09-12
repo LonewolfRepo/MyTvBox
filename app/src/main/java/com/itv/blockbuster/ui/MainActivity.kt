@@ -40,4 +40,21 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    // NEW: onUserLeaveHint() fires specifically when the user makes a
+    // deliberate choice to leave the app to the foreground of something
+    // else - pressing Home, or switching away via Recents - as opposed to
+    // other things that also pause/stop an Activity (an incoming call,
+    // pulling down the notification shade, the screen turning off, or this
+    // app itself launching another of its own activities/screens). That
+    // makes it the right, precise hook for "Home button pressed": rather
+    // than letting the system do its normal thing (move the task to the
+    // background so it can be resumed later, i.e. "minimize"), immediately
+    // tear the task down and kill the process outright, so there's nothing
+    // left running to resume - the app terminates instead of minimizing.
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        finishAndRemoveTask()
+        android.os.Process.killProcess(android.os.Process.myPid())
+    }
 }

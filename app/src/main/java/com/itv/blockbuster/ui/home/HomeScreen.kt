@@ -77,6 +77,7 @@ import com.itv.blockbuster.ui.theme.BbTextPrimary
 import com.itv.blockbuster.ui.theme.BbTextSecondary
 import com.itv.blockbuster.util.FocusRegistry
 import com.itv.blockbuster.util.VodNavigationCache
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
@@ -202,7 +203,7 @@ fun HomeScreen(
                 onOpenPortals = onOpenPortals
             )
             (state.isLoading || state.isConnecting) && state.rows.isEmpty() ->
-                LoadingOverlay(isConnecting = state.isConnecting)
+                LoadingOverlay(isConnecting = state.isConnecting, route = route)
             else -> {
                 Column(modifier = Modifier.fillMaxSize()) {
                     if (isPortrait) {
@@ -580,8 +581,29 @@ private fun HomeCategoryDropdown(
 }
 
 @Composable
-private fun LoadingOverlay(isConnecting: Boolean) {
-    Column(modifier = Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
+private fun LoadingOverlay(isConnecting: Boolean, route: String) {
+    // D-pad focus: for routes with no corresponding rail item (Adult VOD,
+    // opened from AdultHubScreen's card rather than the rail - see
+    // FocusRegistry.isRailRegistered), claim focus onto this loading
+    // placeholder immediately on mount - see LiveTvScreen's identical fix
+    // for the full rationale (the rail visibly opening and holding focus
+    // for a route it was never going to end up controlling anyway).
+    val loadingFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        if (!FocusRegistry.isRailRegistered(route)) {
+            repeat(20) { attempt ->
+                delay(50)
+                if (loadingFocusRequester.runCatching { requestFocus() }.isSuccess) return@LaunchedEffect
+            }
+        }
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .focusRequester(loadingFocusRequester)
+            .focusable(),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
         Spacer(modifier = Modifier.weight(1f))
         CircularProgressIndicator(color = BbAccent)
         Spacer(Modifier.height(16.dp))

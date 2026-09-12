@@ -81,6 +81,7 @@ import com.itv.blockbuster.ui.theme.BbTextPrimary
 import com.itv.blockbuster.ui.theme.BbTextSecondary
 import com.itv.blockbuster.util.FocusRegistry
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 
 enum class SortMode { DEFAULT, A_Z, Z_A, NUMERIC }
 
@@ -160,10 +161,35 @@ fun LiveTvScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
+    // D-pad focus: for routes with no corresponding rail item (Adult Live,
+    // opened from AdultHubScreen's card rather than the rail - see
+    // FocusRegistry.isRailRegistered), the rail can never legitimately hold
+    // focus while this screen loads, since requestRail(route) has nothing
+    // to succeed against. Without claiming focus onto something of our own
+    // immediately, whatever was focused before navigating here (the Adult
+    // Live card) simply falls through to Android's own default-focus-search
+    // once it's disposed - which, since the rail is still composed and
+    // adjacent, visibly lands there and stays until real content is ready.
+    // Claiming this loading placeholder's focus immediately on mount wins
+    // that race, so the rail never visibly opens for a route it was never
+    // going to end up controlling anyway.
+    val loadingFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        if (!FocusRegistry.isRailRegistered(route)) {
+            repeat(20) { attempt ->
+                delay(50)
+                if (loadingFocusRequester.runCatching { requestFocus() }.isSuccess) return@LaunchedEffect
+            }
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize().background(BbBackground)) {
         if (state.isLoading || state.isConnecting) {
             Column(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .focusRequester(loadingFocusRequester)
+                    .focusable(),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {

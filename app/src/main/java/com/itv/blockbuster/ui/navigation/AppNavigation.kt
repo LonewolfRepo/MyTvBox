@@ -312,7 +312,8 @@ fun AppNavigation(
                 AdultGate(navController, adultSessionManager, Routes.ADULT_LIVE_TV) {
                     LiveTvScreen(
                         onPlayChannel = { url, channelId -> navController.navigate("player/${encodeUrl(url)}/$channelId/none") },
-                        onOpenCatchup = { channelId -> navController.navigate("catchup/$channelId") }
+                        onOpenCatchup = { channelId -> navController.navigate("catchup/$channelId") },
+                        route = Routes.ADULT_LIVE_TV
                     )
                 }
             }

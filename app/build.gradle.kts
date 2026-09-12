@@ -34,7 +34,16 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions { jvmTarget = "17" }
+    kotlinOptions {
+        jvmTarget = "17"
+        // FIX: FocusRequester.Cancel (used to block D-pad Up/Down from
+        // escaping to the rail at content boundaries - see FocusRegistry/
+        // CarouselComponents/etc.) is part of Compose's @ExperimentalComposeUiApi
+        // surface. Opting in at the module level avoids needing
+        // @OptIn(ExperimentalComposeUiApi::class) on every function that
+        // touches it, since that's now spread across many files.
+        freeCompilerArgs += "-opt-in=androidx.compose.ui.ExperimentalComposeUiApi"
+    }
     buildFeatures { compose = true }
     composeOptions { kotlinCompilerExtensionVersion = "1.5.14" } // Updated from 1.5.8
     packaging {

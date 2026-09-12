@@ -57,6 +57,25 @@ object FocusRegistry {
         return success
     }
 
+    /**
+     * True if `route` corresponds to an actual top-level rail item (a
+     * RailSections entry, Settings, or Profile) - false for any sub-route
+     * reached by clicking something WITHIN a screen rather than a rail item
+     * (e.g. Adult Live/VOD, opened from AdultHubScreen's cards). Used by
+     * those sub-screens to know whether they can rely on the rail
+     * legitimately holding focus while they load (true for a real rail
+     * route - the normal, correct "rail shows focus while its content
+     * loads" behavior) or whether they need to proactively claim focus
+     * onto something of their own immediately on mount instead (false -
+     * requestRail(route) can never succeed for a route with no rail item to
+     * begin with, so without this, focus that was on whatever UI element
+     * was clicked to navigate here simply falls through to Android's own
+     * default-focus-search once that element is disposed, which - since
+     * the rail is still composed and adjacent - visibly lands there and
+     * stays until the destination's own content finishes loading).
+     */
+    fun isRailRegistered(route: String): Boolean = railRequesters.containsKey(route)
+
     // Ground truth for "which rail item currently actually has focus",
     // reported by each RailItem's own onFocusChanged. Not used to gate any
     // decision any more (that caused issue #1 - see notifyContentReady) but
@@ -215,6 +234,29 @@ object FocusRegistry {
         pendingRestoreRoute = route
     }
     fun isPendingRestoreFor(route: String): Boolean = pendingRestoreRoute == route
+
+    /**
+     * Polls briefly for armRestoreFocus(route) to have been called, rather
+     * than checking isPendingRestoreFor once and giving up immediately -
+     * the ON_RESUME lifecycle callback a screen uses to call this (and
+     * restoreClickedItemFocus below) isn't strictly ordered relative to
+     * RailShell's own route-change LaunchedEffect that calls
+     * armRestoreFocus (different parts of the composition tree, triggered
+     * by the same navigation event), so the arm signal may not have
+     * arrived yet the instant this is checked. Used by screens whose
+     * sections can reorder (e.g. Recents promoting a just-played item to
+     * the front) to decide whether it's safe/necessary to snap their own
+     * row scroll states back to index 0 before attempting the restore -
+     * skipped entirely for ordinary resumes (tab switches, rail clicks) so
+     * those don't lose their scroll position for no reason.
+     */
+    suspend fun awaitPendingRestore(route: String): Boolean {
+        repeat(20) {
+            if (pendingRestoreRoute == route) return true
+            delay(50)
+        }
+        return false
+    }
 
     /**
      * Called when a browser screen becomes visible again (e.g. ON_RESUME
