@@ -80,27 +80,30 @@ import kotlinx.coroutines.delay
 
 private const val TAG = "DpadFocus"
 
+// Rail order (Profile and Settings are pinned separately, top/bottom):
+// Profile, Favorites, Recents, Home, Movies, TV Show, Live TV, TV Guide, Adult, Settings.
+// Search is intentionally excluded - no Search icon on the rail.
 private val RailSections = listOf(
+    AppSection.MY_LIST,
+    AppSection.RECENT,
     AppSection.HOME,
-    AppSection.SEARCH,
     AppSection.MOVIES,
     AppSection.TV_SHOWS,
     AppSection.LIVE_TV,
     AppSection.TV_GUIDE,
-    AppSection.MY_LIST,
-    AppSection.RECENT,
     AppSection.ADULT
 )
 
+// Portrait overlay menu order: Favorites, Recents, Home, Movies, TV Show, Live TV, TV Guide, Adult.
 private val MenuSections = listOf(
+    AppSection.MY_LIST,
+    AppSection.RECENT,
     AppSection.HOME,
     AppSection.MOVIES,
     AppSection.TV_SHOWS,
     AppSection.LIVE_TV,
     AppSection.TV_GUIDE,
-    AppSection.MY_LIST,
-    AppSection.RECENT,
-    AppSection.ADULT // NEW
+    AppSection.ADULT
 )
 
 /**
