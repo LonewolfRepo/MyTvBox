@@ -1,5 +1,7 @@
 package com.itv.blockbuster.domain.model
 
+import androidx.compose.runtime.Immutable
+
 data class PortalServerConfig(
     val id: Int = 0,
     val name: String,
@@ -38,6 +40,19 @@ data class PortalChannel(
     val isCensored: Boolean = false
 )
 
+// FIX: every field here is a val (String/Boolean/Int), except `series`,
+// which is a plain List<String>. Since List is an interface the Compose
+// compiler can't prove is never mutated after construction, that ONE field
+// was enough to mark this WHOLE class unstable - and since PortalVodItem is
+// the model behind every poster/episode card in every carousel and list in
+// the app, that meant Compose couldn't skip recomposition for ANY of them
+// based on "did this item's data actually change" - every scroll tick,
+// focus change, or state update forced every item composable touching this
+// type to recompose, regardless of whether its own data changed. @Immutable
+// tells the compiler to trust that this class behaves as immutable (true in
+// practice - series is never mutated after construction anywhere in the
+// codebase) rather than needing to prove it structurally.
+@Immutable
 data class PortalVodItem(
     val id: String,
     val name: String,

@@ -23,7 +23,7 @@ import com.itv.blockbuster.data.local.entity.ServerEntity
         PlaybackProgressEntity::class,
         RecentEntity::class // Replaces RecentLiveEntity
     ],
-    version = 7, // BUMPED
+    version = 9, // BUMPED - extended PlaybackProgressEntity's movieId index to also cover seasonId/episodeId, see its own comment
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {

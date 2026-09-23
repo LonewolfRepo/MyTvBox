@@ -13,12 +13,30 @@
     <application
         android:name=".BlockbusterApp"
         android:allowBackup="false"
-        android:banner="@mipmap/ic_launcher"
+        android:banner="@drawable/tv_banner"
         android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.Blockbuster"
-        android:usesCleartextTraffic="true">
+        android:usesCleartextTraffic="true"
+        android:largeHeap="true">
+        <!-- NEW (confirmed via device logcat + dumpsys gfxinfo: 28 GC
+             events and 24 Choreographer "Skipped frames" warnings in a
+             ~38s scrolling session, tightly correlated in time - a GC
+             event followed by a frame skip/Davey stall within 0.2-0.8s,
+             repeatedly, throughout). This app decodes a large volume of
+             poster/thumbnail images during scrolling (confirmed via
+             NativeAlloc GC - freeing 60k-300k objects per cycle), and
+             with the default heap ceiling, ART has to run GC very
+             frequently to stay under it. A larger heap ceiling means
+             fewer, less frequent collections for the same allocation
+             rate - it doesn't reduce how much garbage gets created, but
+             it does reduce how often collection has to happen at all,
+             which is what's overlapping with rendering during scrolling
+             here. Not a full fix - see the write-up for what would
+             address the allocation rate itself - but it's a safe,
+             zero-code-risk lever worth having regardless. -->
 
         <activity
             android:name=".ui.MainActivity"

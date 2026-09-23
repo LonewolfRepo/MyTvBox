@@ -1,22 +1,34 @@
 package com.itv.blockbuster.util
 
 import android.util.Log
-import androidx.compose.foundation.focusable
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.remember
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.onFocusChanged
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private const val TAG = "DpadFocus"
 
+// UPDATED (performance): every focus event, retry-loop iteration, and
+// carousel item registration used to call Log.d(TAG, "...") directly with a
+// pre-built string template. Kotlin evaluates and allocates that
+// interpolated string as a normal function argument BEFORE Log.d is even
+// entered - so the cost was paid on every single call regardless of whether
+// the log line would actually be useful, and this system logs on every rail
+// focus change, every carousel item's registration, and every 50ms of every
+// retry loop (notifyContentReady alone retries up to 200 times). Flip this
+// to true when actively debugging focus behavior; leave it false otherwise
+// so none of that string-building work happens at all in normal use - the
+// `log` helper below takes a lambda specifically so the interpolation
+// inside it is never even evaluated when this is false.
+private const val FOCUS_LOGGING_ENABLED = true
+private inline fun log(message: () -> String) {
+    if (FOCUS_LOGGING_ENABLED) Log.d(TAG, message())
+}
+
 /**
  * App-wide focus memory:
- *  - rememberEntry[route] = id of the last focused item in that section
- *  - restoreRequesters[id] = requester able to re-focus that item
  *  - railRequesters[key] = requester for a rail item (AppSection route, the
  *    Settings item's own Routes.SETTINGS, or PROFILE_KEY for the pinned
  *    Profile row, which has no route of its own since it navigates to the
@@ -29,15 +41,58 @@ private const val TAG = "DpadFocus"
  * NavHost, in a completely separate part of the composition tree) - neither
  * has a direct reference to the other's focus targets otherwise.
  *
- * Every state change and focus attempt logs through android.util.Log with
- * tag "DpadFocus" - filter logcat on that tag to trace the exact sequence of
- * events if focus behavior looks wrong again.
+ * Every state change and focus attempt logs through the log() helper above
+ * (tag "DpadFocus") when FOCUS_LOGGING_ENABLED is flipped to true - filter
+ * logcat on that tag to trace the exact sequence of events if focus
+ * behavior looks wrong again.
  */
 object FocusRegistry {
-    private val restoreRequesters = HashMap<String, FocusRequester>()
-    private val rememberEntry = HashMap<String, String>()
     private val railRequesters = HashMap<String, FocusRequester>()
     private val firstItemRequesters = HashMap<String, FocusRequester>()
+
+    // FIX (confirmed via device logcat: a deferred focus-return attempt,
+    // launched via rememberCoroutineScope() inside a dropdown's onClick,
+    // sometimes never ran at all - no log, no requestFocus() call): the
+    // SAME state change that the deferred attempt is trying to react to
+    // (a category selection, which reloads content and can swap the whole
+    // layout) can itself dispose the composable that scope belongs to
+    // before the delay finishes, silently cancelling the coroutine before
+    // it ever gets a chance to run. This scope is tied to FocusRegistry
+    // itself - a process-wide singleton - so a deferred focus-return
+    // launched here survives any single screen's recomposition, layout
+    // swap, or disposal. SupervisorJob so one cancelled/failed launch here
+    // never affects any other.
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    /**
+     * Requests focus on [requester] after [delayMs] - on FocusRegistry's own
+     * process-wide scope (see its doc comment above), not the caller's own
+     * composable-scoped one, specifically so this survives whatever state
+     * change triggered the need for a delayed focus-return in the first
+     * place (a category/genre selection, which reloads content and can
+     * dispose the very composable that would otherwise have hosted this
+     * coroutine before the delay completes).
+     */
+    fun deferredRequestFocus(requester: FocusRequester, delayMs: Long = 100, shouldClaim: () -> Boolean = { true }) {
+        scope.launch {
+            delay(delayMs)
+            // FIX (confirmed on Live TV: selecting a category is entirely
+            // client-side there, so a reload can settle to FirstItem and
+            // have claimFocusEntry already, correctly, move focus onto the
+            // actual first channel well within this delay - unlike Home,
+            // where a real network round-trip means the reload is still in
+            // flight when this fires). An unconditional claim here would
+            // then yank focus straight back to the trigger, undoing a
+            // focus placement that was already correct. shouldClaim is
+            // evaluated fresh right here, not captured back at call time,
+            // so a caller can check its own latest state (e.g. via
+            // rememberUpdatedState) rather than a stale snapshot from
+            // before this delay even started.
+            if (shouldClaim()) {
+                runCatching { requester.requestFocus() }
+            }
+        }
+    }
 
     /** Rail key for the pinned Profile rail row (not an AppSection route). */
     const val PROFILE_KEY = "rail_profile"
@@ -46,14 +101,14 @@ object FocusRegistry {
 
     // ── Rail item focus ─────────────────────────────────────────────
     fun registerRail(key: String, requester: FocusRequester) {
-        Log.d(TAG, "registerRail: key=$key requester=$requester")
+        log { "registerRail: key=$key requester=$requester" }
         railRequesters[key] = requester
     }
 
     fun requestRail(key: String): Boolean {
         val requester = railRequesters[key]
         val success = requester?.runCatching { requestFocus() }?.isSuccess == true
-        Log.d(TAG, "requestRail: key=$key requesterPresent=${requester != null} success=$success")
+        log { "requestRail: key=$key requesterPresent=${requester != null} success=$success" }
         return success
     }
 
@@ -82,7 +137,7 @@ object FocusRegistry {
     // kept purely as a diagnostic signal, logged on every change.
     private var currentlyFocusedRailKey: String? = null
     fun reportRailFocus(key: String, isFocused: Boolean) {
-        Log.d(TAG, "reportRailFocus: key=$key isFocused=$isFocused (was currentlyFocused=$currentlyFocusedRailKey)")
+        log { "reportRailFocus: key=$key isFocused=$isFocused (was currentlyFocused=$currentlyFocusedRailKey)" }
         if (isFocused) currentlyFocusedRailKey = key
         else if (currentlyFocusedRailKey == key) currentlyFocusedRailKey = null
     }
@@ -93,11 +148,11 @@ object FocusRegistry {
     // pressed while focus is in the content area.
     private var lastRailKey: String = DEFAULT_RAIL_KEY
     fun saveLastRailFocus(key: String) {
-        Log.d(TAG, "saveLastRailFocus: key=$key")
+        log { "saveLastRailFocus: key=$key" }
         lastRailKey = key
     }
     fun focusRail(fallbackKey: String = DEFAULT_RAIL_KEY) {
-        Log.d(TAG, "focusRail: lastRailKey=$lastRailKey fallbackKey=$fallbackKey")
+        log { "focusRail: lastRailKey=$lastRailKey fallbackKey=$fallbackKey" }
         if (!requestRail(lastRailKey)) requestRail(fallbackKey)
     }
 
@@ -114,8 +169,86 @@ object FocusRegistry {
      */
     fun leftEscapeTarget(): FocusRequester {
         val target = railRequesters[lastRailKey]
-        Log.d(TAG, "leftEscapeTarget: lastRailKey=$lastRailKey found=${target != null}")
+        log { "leftEscapeTarget: lastRailKey=$lastRailKey found=${target != null}" }
         return target ?: FocusRequester.Default
+    }
+
+    // FIX ("focus falls on the rail and then transitions to content" when
+    // switching All Categories <-> an individual category): that switch
+    // tears down and rebuilds an entire subtree (LargeHomeHeroLayout's
+    // CarouselRow-based view vs. CategoryGridWithHeroLayout's PosterGrid-
+    // based one - two genuinely different components, not just different
+    // data within the same one), which can take longer than AppShell's
+    // normal 120ms rail-expand debounce, especially if it involves a fresh
+    // fetch for the newly-selected category. The debounce alone can't tell
+    // "held briefly by accident" apart from "held for a while because this
+    // transition is just slower" - both look identical to a timer, same
+    // root issue as the cold-start case Phase 2 already fixed explicitly.
+    //
+    // Any screen sets this true for the duration of its own FocusEntry.None
+    // state (still loading/transitioning - see FocusEntry.kt) and false
+    // otherwise; AppShell checks it the moment the rail gains focus and, if
+    // true, suppresses that claim's visual expansion outright regardless of
+    // how long it lasts - the same explicit, duration-independent
+    // mechanism as the cold-start claim, just triggered by a different
+    // source. Plain var, not Compose state: nothing here needs to trigger
+    // recomposition on its own, AppShell just reads the current value at
+    // the moment it already needs to react to a focus change for its own
+    // reasons.
+    @Volatile
+    private var contentIsTransitioning = false
+
+    fun setContentTransitioning(isTransitioning: Boolean) {
+        contentIsTransitioning = isTransitioning
+    }
+
+    fun isContentTransitioning(): Boolean = contentIsTransitioning
+
+    // FIX (root cause of "focus snaps back to first item on scroll",
+    // "carousel items oscillate under rapid Right", "vertical pagination
+    // breaks" - see claimFocusEntry's doc comment in FocusEntry.kt for the
+    // full mechanism): tracks, per scope (typically a screen's route), the
+    // identity of the last focus-claim transition that was actually acted
+    // on - so if a DIFFERENT item later qualifies as "the one to claim"
+    // for the exact SAME transition (e.g. because isFirstItem's target
+    // shifted under continued scrolling, not because a genuinely new
+    // transition occurred), it finds this transition already consumed and
+    // does nothing, instead of re-claiming focus out from under the user.
+    private val consumedFocusClaims = HashMap<String, Any>()
+
+    /**
+     * Returns true if this exact [claimId] has already been successfully
+     * claimed for [scopeKey] - a pure check, does not itself record
+     * anything. See markFocusEntryClaimed for recording a successful
+     * claim.
+     */
+    fun hasFocusEntryBeenClaimed(scopeKey: String, claimId: Any): Boolean =
+        consumedFocusClaims[scopeKey] === claimId
+
+    /**
+     * Records [claimId] as successfully claimed for [scopeKey].
+     *
+     * FIX (rail catching focus well after content had already settled to
+     * FirstItem - confirmed via device logcat: "Rail gained focus -
+     * isContentTransitioning=false", happening seconds after the FirstItem
+     * transition, not during it): the original single tryClaimFocusEntry()
+     * marked a transition consumed the moment a claim was ATTEMPTED, before
+     * knowing whether requestFocus() actually succeeded. If it failed
+     * silently (e.g. the target's FocusRequester genuinely wasn't attached
+     * yet at that exact moment - a timing race, not a logic bug), the
+     * transition was permanently marked consumed anyway, so no later item
+     * could ever retry it - focus stayed on whatever it was before (e.g.
+     * the search field) until something else disposed that element,
+     * finding nothing left to catch it. Splitting into a peek
+     * (hasFocusEntryBeenClaimed, checked BEFORE attempting - still
+     * prevents the original re-fire bug, since an already-succeeded claim
+     * is never reattempted) and a commit (this function, called only
+     * AFTER requestFocus() is confirmed to have succeeded) means a failed
+     * attempt leaves the transition claimable, so a later item still
+     * qualifying for isFirstItem can genuinely retry it.
+     */
+    fun markFocusEntryClaimed(scopeKey: String, claimId: Any) {
+        consumedFocusClaims[scopeKey] = claimId
     }
 
     // ── Rail -> content focus sequencing ────────────────────────────
@@ -136,7 +269,7 @@ object FocusRegistry {
     // route is armed, always try to advance.
     private var pendingContentFocusRoute: String? = null
     fun armInitialContentFocus(route: String) {
-        Log.d(TAG, "armInitialContentFocus: route=$route")
+        log { "armInitialContentFocus: route=$route" }
         pendingContentFocusRoute = route
     }
     // ── Route transition tracking (survives any single composable's own
@@ -157,8 +290,32 @@ object FocusRegistry {
 
     fun isPendingFor(route: String): Boolean = pendingContentFocusRoute == route
     fun registerFirstItem(route: String, requester: FocusRequester) {
-        Log.d(TAG, "registerFirstItem: route=$route requester=$requester")
+        log { "registerFirstItem: route=$route requester=$requester" }
         firstItemRequesters[route] = requester
+    }
+
+    /**
+     * FIX: counterpart to registerFirstItem, called from the registering
+     * composable's DisposableEffect(onDispose). Without this, when the item
+     * that registered itself leaves composition (filtered out by a search
+     * query, category change, or scrolled/recomposed away during a layout
+     * churn like the on-screen keyboard opening), firstItemRequesters[route]
+     * keeps pointing at a FocusRequester that's no longer attached to any
+     * node. firstItemTarget() would then hand that dangling requester out as
+     * a `down = ...` focusProperties target - and unlike an explicit
+     * .requestFocus() call (which we can runCatching), Compose's OWN
+     * internal focus-search throws an uncatchable
+     * IllegalStateException("FocusRequester is not initialized") the moment
+     * real D-pad key dispatch tries to navigate into it, crashing the app
+     * outright. Only clears the entry if it STILL matches the given
+     * requester, so a stale dispose firing after a newer item has already
+     * re-registered for this route can't wrongly wipe out the current one.
+     */
+    fun unregisterFirstItem(route: String, requester: FocusRequester) {
+        if (firstItemRequesters[route] === requester) {
+            log { "unregisterFirstItem: route=$route requester=$requester" }
+            firstItemRequesters.remove(route)
+        }
     }
 
     /**
@@ -174,7 +331,68 @@ object FocusRegistry {
      */
     fun firstItemTarget(route: String): FocusRequester {
         val target = firstItemRequesters[route]
-        Log.d(TAG, "firstItemTarget: route=$route found=${target != null}")
+        log { "firstItemTarget: route=$route found=${target != null}" }
+        return target ?: FocusRequester.Default
+    }
+
+    // FIX (D-pad-only, confirmed not reproducible via touch scroll: "focus
+    // jumps to categories filter during rapid Up-scroll, even though more
+    // rows exist above"): Compose Foundation's LazyColumn beyond-bounds
+    // composition isn't tunable in this project's version (no
+    // beyondBoundsItemCount parameter until a later Foundation release), so
+    // rows composed long ago during an initial scroll-down can be disposed
+    // by the time a fast, sustained Up-scroll reaches back up to them.
+    // Every row except the very first has no explicit upEscapeTarget, so it
+    // falls through to Compose's own default spatial focus search - which
+    // can only find candidates that are ACTUALLY composed right now. If the
+    // real row above isn't, that search keeps looking and lands on the
+    // always-composed filter bar instead, since nothing else catches it
+    // first.
+    //
+    // This registry sidesteps that entirely: every row (not just the first)
+    // registers its own first-item requester here, keyed by a caller-chosen
+    // key (route + row id, so different screens' rows never collide). The
+    // row below explicitly targets "the row above's registered requester"
+    // via rowFirstItemTarget() instead of leaving Up to Compose's live
+    // search - so it works whether or not the row above happens to be
+    // composed at that exact moment (as long as it's been composed at
+    // least once and registered), no different from firstItemTarget's own
+    // route-level equivalent above.
+    //
+    // Known tradeoff: this always lands on the row above's FIRST item,
+    // not necessarily preserving the column/horizontal position you were
+    // at - Compose's natural spatial search (when it works) tries to land
+    // near the same column. Revisit if that's noticeable in practice -
+    // remembering the last-focused item per row instead of always the
+    // first would fix it, at the cost of tracking focus on every item
+    // instead of just the first.
+    private val rowFirstItemRequesters = HashMap<String, FocusRequester>()
+
+    fun registerRowFirstItem(key: String, requester: FocusRequester) {
+        log { "registerRowFirstItem: key=$key requester=$requester" }
+        rowFirstItemRequesters[key] = requester
+    }
+
+    /** Counterpart to registerRowFirstItem - same dangling-requester
+     *  reasoning as unregisterFirstItem's doc comment above. */
+    fun unregisterRowFirstItem(key: String, requester: FocusRequester) {
+        if (rowFirstItemRequesters[key] === requester) {
+            log { "unregisterRowFirstItem: key=$key requester=$requester" }
+            rowFirstItemRequesters.remove(key)
+        }
+    }
+
+    /**
+     * The FocusRequester D-pad Up should jump to from a row that isn't the
+     * screen's first - looked up live at the moment Up is pressed (same
+     * "always current, never cached at composition time" reasoning as
+     * firstItemTarget). FocusRequester.Default falls back to normal spatial
+     * search if the row above has genuinely never been composed/registered
+     * yet (e.g. this really is being reached for the first time).
+     */
+    fun rowFirstItemTarget(key: String): FocusRequester {
+        val target = rowFirstItemRequesters[key]
+        log { "rowFirstItemTarget: key=$key found=${target != null}" }
         return target ?: FocusRequester.Default
     }
 
@@ -189,15 +407,15 @@ object FocusRegistry {
      * filtered data arrives.
      */
     suspend fun focusFirstItem(route: String) {
-        Log.d(TAG, "focusFirstItem: route=$route starting attempts")
+        log { "focusFirstItem: route=$route starting attempts" }
         repeat(20) { attempt ->
             val requester = firstItemRequesters[route]
             val moved = requester?.runCatching { requestFocus() }?.isSuccess == true
-            Log.d(TAG, "focusFirstItem: route=$route attempt=$attempt requesterPresent=${requester != null} moved=$moved")
+            log { "focusFirstItem: route=$route attempt=$attempt requesterPresent=${requester != null} moved=$moved" }
             if (moved) return
             delay(50)
         }
-        Log.d(TAG, "focusFirstItem: route=$route gave up after retries")
+        log { "focusFirstItem: route=$route gave up after retries" }
     }
 
     // ── Content -> detail -> back focus restoration ─────────────────
@@ -225,12 +443,12 @@ object FocusRegistry {
     }
 
     fun rememberClickedItem(route: String, itemId: String) {
-        Log.d(TAG, "rememberClickedItem: route=$route itemId=$itemId")
+        log { "rememberClickedItem: route=$route itemId=$itemId" }
         lastClickedItem[route] = itemId
     }
 
     fun armRestoreFocus(route: String) {
-        Log.d(TAG, "armRestoreFocus: route=$route")
+        log { "armRestoreFocus: route=$route" }
         pendingRestoreRoute = route
     }
     fun isPendingRestoreFor(route: String): Boolean = pendingRestoreRoute == route
@@ -278,30 +496,30 @@ object FocusRegistry {
      * requester to become available.
      */
     suspend fun restoreClickedItemFocus(route: String): Boolean {
-        Log.d(TAG, "restoreClickedItemFocus: route=$route starting attempts")
+        log { "restoreClickedItemFocus: route=$route starting attempts" }
         repeat(20) { attempt ->
             if (pendingRestoreRoute != route) {
-                Log.d(TAG, "restoreClickedItemFocus: route=$route attempt=$attempt not (yet) armed, pendingRestoreRoute=$pendingRestoreRoute")
+                log { "restoreClickedItemFocus: route=$route attempt=$attempt not (yet) armed, pendingRestoreRoute=$pendingRestoreRoute" }
                 delay(50)
                 return@repeat
             }
             val itemId = lastClickedItem[route]
             if (itemId == null) {
-                Log.d(TAG, "restoreClickedItemFocus: route=$route no remembered item, clearing pending")
+                log { "restoreClickedItemFocus: route=$route no remembered item, clearing pending" }
                 pendingRestoreRoute = null
                 return false
             }
             val requester = itemRequesters[itemKey(route, itemId)]
             val moved = requester?.runCatching { requestFocus() }?.isSuccess == true
-            Log.d(TAG, "restoreClickedItemFocus: route=$route itemId=$itemId attempt=$attempt requesterPresent=${requester != null} moved=$moved")
+            log { "restoreClickedItemFocus: route=$route itemId=$itemId attempt=$attempt requesterPresent=${requester != null} moved=$moved" }
             if (moved) {
                 pendingRestoreRoute = null
-                Log.d(TAG, "restoreClickedItemFocus: route=$route itemId=$itemId SUCCESS")
+                log { "restoreClickedItemFocus: route=$route itemId=$itemId SUCCESS" }
                 return true
             }
             delay(50)
         }
-        Log.d(TAG, "restoreClickedItemFocus: route=$route gave up after retries")
+        log { "restoreClickedItemFocus: route=$route gave up after retries" }
         return false
     }
 
@@ -325,75 +543,68 @@ object FocusRegistry {
      */
     suspend fun notifyContentReady(route: String) {
         if (pendingContentFocusRoute != route) {
-            Log.d(TAG, "notifyContentReady: route=$route ignored, pendingContentFocusRoute=$pendingContentFocusRoute")
+            log { "notifyContentReady: route=$route ignored, pendingContentFocusRoute=$pendingContentFocusRoute" }
             return
         }
-        Log.d(TAG, "notifyContentReady: route=$route starting attempts to focus first item")
+        log { "notifyContentReady: route=$route starting attempts to focus first item" }
         // The first item may not be composed/registered yet the instant
         // loading finishes.
         repeat(200) { attempt ->
             if (pendingContentFocusRoute != route) {
-                Log.d(TAG, "notifyContentReady: route=$route aborted mid-retry, pendingContentFocusRoute changed to $pendingContentFocusRoute")
+                log { "notifyContentReady: route=$route aborted mid-retry, pendingContentFocusRoute changed to $pendingContentFocusRoute" }
                 return
             }
             val requester = firstItemRequesters[route]
             val moved = requester?.runCatching { requestFocus() }?.isSuccess == true
-            Log.d(TAG, "notifyContentReady: route=$route attempt=$attempt requesterPresent=${requester != null} requesterId=${System.identityHashCode(requester)} moved=$moved")
+            log { "notifyContentReady: route=$route attempt=$attempt requesterPresent=${requester != null} requesterId=${System.identityHashCode(requester)} moved=$moved" }
             if (moved) {
                 pendingContentFocusRoute = null
-                Log.d(TAG, "notifyContentReady: route=$route SUCCESS - focus moved to first item")
+                log { "notifyContentReady: route=$route SUCCESS - focus moved to first item" }
                 return
             }
             delay(50)
         }
-        Log.d(TAG, "notifyContentReady: route=$route gave up after retries, leaving pendingContentFocusRoute set for a later retry")
+        log { "notifyContentReady: route=$route gave up after retries, leaving pendingContentFocusRoute set for a later retry" }
     }
 
-    fun entryFor(route: String): String? = rememberEntry[route]
+    // ── Back-press interception ──────────────────────────────────────
+    // AppShell's own BackHandler (in AppShell.kt) is deliberately the LAST
+    // one registered in the composition (see its doc comment), specifically
+    // so it always wins the OnBackPressedDispatcher's LIFO priority over
+    // anything a screen further down in the tree could register - which
+    // means a screen adding its OWN BackHandler for a screen-specific action
+    // (e.g. Home wanting Back to clear an active search instead of
+    // refocusing the rail) would simply never fire; AppShell's handler
+    // always intercepts first regardless of registration order deeper in
+    // the tree. This hook lets a screen ask AppShell's single BackHandler to
+    // check with it FIRST, without introducing a second competing
+    // BackHandler: the screen sets an interceptor while its special case is
+    // active, AppShell's BackHandler consumes it (if present) before falling
+    // through to its normal rail-refocus/exit-app behavior, and the screen
+    // clears the interceptor once it's no longer needed (e.g. in a
+    // DisposableEffect keyed on whatever "special case active" condition,
+    // clearing it both when that condition ends AND on dispose so a stale
+    // interceptor never lingers into an unrelated screen).
+    private var backPressInterceptor: (() -> Boolean)? = null
 
-    internal fun saveRestore(id: String, requester: FocusRequester) { restoreRequesters[id] = requester }
-    internal fun saveEntry(route: String, id: String) { rememberEntry[route] = id }
-    internal fun tryFocus(id: String): Boolean =
-        restoreRequesters[id]?.runCatching { requestFocus() }?.isSuccess == true
-}
-
-/**
- * One-stop focus behavior for any focusable item.
- * FIX: Changed to a Modifier extension function so it can be chained cleanly.
- */
-@Composable
-fun Modifier.restorableFocus(
-    restoreKey: String?,
-    route: String? = null,
-    initialFocus: Boolean = false
-): Modifier {
-    val requester = remember { FocusRequester() }
-    if (restoreKey != null) FocusRegistry.saveRestore(restoreKey, requester)
-
-    LaunchedEffect(restoreKey, route, initialFocus) {
-        if (restoreKey == null || route == null) return@LaunchedEffect
-        val entry = FocusRegistry.entryFor(route)
-        when {
-            entry == restoreKey -> {
-                // Restore: item may not be composed yet -> retry briefly
-                repeat(20) {
-                    if (FocusRegistry.tryFocus(restoreKey)) return@LaunchedEffect
-                    delay(50)
-                }
-            }
-            entry == null && initialFocus -> {
-                // First visit: focus the first item
-                requester.requestFocus()
-            }
-        }
+    /** Screen-side: install (or clear, by passing null) the interceptor. */
+    fun setBackPressInterceptor(interceptor: (() -> Boolean)?) {
+        backPressInterceptor = interceptor
     }
 
-    return this
-        .focusRequester(requester)
-        .focusable()
-        .onFocusChanged {
-            if (it.isFocused && restoreKey != null && route != null) {
-                FocusRegistry.saveEntry(route, restoreKey)
-            }
+    /**
+     * AppShell-side: gives the current interceptor (if any) first refusal on
+     * this back press. Returns true if it consumed the press (AppShell
+     * should do nothing further), false if there's no interceptor or it
+     * declined (AppShell should proceed with its normal handling).
+     */
+    fun consumeBackPressInterceptor(): Boolean {
+        val interceptor = backPressInterceptor ?: run {
+            android.util.Log.d("DpadFocus", "consumeBackPressInterceptor: no interceptor registered - falling through to focusRail()")
+            return false
         }
+        val consumed = interceptor()
+        android.util.Log.d("DpadFocus", "consumeBackPressInterceptor: interceptor present, consumed=$consumed")
+        return consumed
+    }
 }

@@ -35,7 +35,17 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 data class HomeUiState(
-    val isConnecting: Boolean = false,
+    // FIX ("landing page starts on no items then goes to loading"): the
+    // screen's loading overlay is gated on (isLoading || isConnecting) &&
+    // rows.isEmpty() - with both defaulting false, the very first
+    // composition (before init{}'s coroutine gets a dispatcher turn to
+    // flip this) rendered with neither flag set and an empty row list, so
+    // it fell through to whatever renders when nothing is loading - an
+    // empty page - for a frame or two before the overlay appeared.
+    // Defaulting isConnecting to true (matching the real first step of the
+    // connect flow) means the loading overlay is already what's shown on
+    // the very first frame.
+    val isConnecting: Boolean = true,
     val isConnected: Boolean = false,
     val connectionError: String? = null,
     val isLoading: Boolean = false,
@@ -65,11 +75,51 @@ class HomeViewModel @Inject constructor(
     companion object {
         // TV typing is slow (remote / sparse keyboard): wait 800ms after the last
         // keystroke before hitting the portal. Clearing the field bypasses this.
-        const val SEARCH_DEBOUNCE_MS = 800L
+        const val SEARCH_DEBOUNCE_MS = 3000L
     }
 
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
+
+    // NEW: which "section" this ViewModel instance is serving - "home" (no
+    // filter, mixed movies+series, the original behavior), "vod" (Movies -
+    // items where isSeries is false), or "series" (TV Shows - isSeries
+    // true). null means the screen hasn't called initialize() yet; the
+    // connection/load flow below waits for it before doing anything, so a
+    // Movies/TV Shows screen can never briefly flash unfiltered Home
+    // content before its real contentType is known.
+    private val _contentType = MutableStateFlow<String?>(null)
+
+    /**
+     * Called once by HomeScreen (mirroring VodBrowserScreen's own
+     * initialize() pattern) so this single ViewModel/screen pair can serve
+     * Home, Movies, or TV Shows depending on which route it was opened for.
+     * Safe to call repeatedly with the same value (no-op) - HomeScreen calls
+     * this from a LaunchedEffect(contentType), which re-fires on
+     * recomposition but only actually changes value on a genuine route
+     * switch.
+     */
+    fun initialize(contentType: String) {
+        if (_contentType.value == contentType) return
+        _contentType.value = contentType
+    }
+
+    // Convenience accessor for the functions below (selectCategory,
+    // loadMoreCategories, etc.) that run well after initialize() has always
+    // already been called - defaults to "home" only as a last-resort guard,
+    // never actually expected to be hit in practice.
+    private fun contentType(): String = _contentType.value ?: "home"
+
+    // NEW: the category sort/visibility setting is stored per-section, same
+    // convention VodBrowserViewModel already used for Movies/TV Shows
+    // ("order_vod"/"order_series") - reusing those exact keys here means a
+    // user's existing Movies/TV Shows category customization carries over
+    // unchanged now that those sections are served by this ViewModel too.
+    private fun orderSettingKey(): String = when (contentType()) {
+        "series" -> "order_series"
+        "vod" -> "order_vod"
+        else -> "order_home"
+    }
 
     private val _favoriteIds = MutableStateFlow<Set<String>>(emptySet())
     val favoriteIds: StateFlow<Set<String>> = _favoriteIds.asStateFlow()
@@ -127,19 +177,29 @@ class HomeViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
-            serverRepository.getActiveServer().collect { server ->
-                if (server == null) {
-                    _uiState.update {
-                        it.copy(
-                            connectionError = "No portal configured. Add a portal to start watching",
-                            isConnecting = false
-                        )
+            // NEW: also waits on _contentType - Home/Movies/TV Shows all
+            // share this one connect-and-load flow, but it must not fire
+            // with the wrong (or a not-yet-known) content type. HomeScreen
+            // calls initialize() from a LaunchedEffect essentially
+            // immediately on first composition, so in practice this only
+            // ever delays a single frame for Home's own default ("home")
+            // case - Movies/TV Shows behave exactly like VodBrowserScreen's
+            // own initialize()-gated pattern.
+            combine(serverRepository.getActiveServer(), _contentType) { server, type -> server to type }
+                .collect { (server, type) ->
+                    if (type == null) return@collect
+                    if (server == null) {
+                        _uiState.update {
+                            it.copy(
+                                connectionError = "No portal configured. Add a portal to start watching",
+                                isConnecting = false
+                            )
+                        }
+                    } else {
+                        _uiState.update { it.copy(activeServerName = server.name, connectionError = null) }
+                        connectAndLoad(server)
                     }
-                } else {
-                    _uiState.update { it.copy(activeServerName = server.name, connectionError = null) }
-                    connectAndLoad(server)
                 }
-            }
         }
     }
 
@@ -168,7 +228,7 @@ class HomeViewModel @Inject constructor(
             if (!_uiState.value.isConnected) return@launch
             val p = prefs.activeProfileIdFlow.firstOrNull() ?: return@launch
             val s = sessionManager.activePortal.value?.serverId ?: 0
-            val rawOrder = settings.getString(p, s, "order_home", "")
+            val rawOrder = settings.getString(p, s, orderSettingKey(), "")
             if (rawOrder != applied) loadHome()
         }
     }
@@ -202,12 +262,19 @@ class HomeViewModel @Inject constructor(
         val p = prefs.activeProfileIdFlow.firstOrNull() ?: -1
         val s = sessionManager.activePortal.value?.serverId ?: 0
 
-        // Read the Home category order/visibility setting and remember its signature
-        val rawOrder = settings.getString(p, s, "order_home", "")
+        // Read the category order/visibility setting (per-section key - see
+        // orderSettingKey()) and remember its signature.
+        val rawOrder = settings.getString(p, s, orderSettingKey(), "")
         lastAppliedHomeOrder = rawOrder
 
-        val categories = portalService.fetchVodCategories().getOrDefault(emptyList())
-        val genres = portalService.fetchVodGenres().getOrDefault(emptyList())
+        // UPDATED: these two were sequential awaits (fetch categories, THEN
+        // fetch genres) despite being fully independent requests - each one
+        // now pays for its own round trip back to back for no reason.
+        val (categories, genres) = coroutineScope {
+            val categoriesDeferred = async { portalService.fetchVodCategories().getOrDefault(emptyList()) }
+            val genresDeferred = async { portalService.fetchVodGenres().getOrDefault(emptyList()) }
+            Pair(categoriesDeferred.await(), genresDeferred.await())
+        }
 
 
         // Respect Home Category Settings:
@@ -324,10 +391,21 @@ class HomeViewModel @Inject constructor(
      * FIX: Censored items are stripped from the visible results.
      */
     private suspend fun loadSearchResults(query: String) {
-        _uiState.update { it.copy(isLoading = true, hero = null) }
+        // NEW: unlike loadCategoryContent, deliberately does NOT null out
+        // hero here - Home now keeps using the same hero-overlay layout
+        // while searching (see the guard in HomeScreen), so nulling hero
+        // out would blank the persistent hero banner the instant a search
+        // starts, which is exactly the "carousel jumping" this was meant to
+        // avoid. Whatever hero was already showing just stays as-is.
+        _uiState.update { it.copy(isLoading = true) }
+        // Searching never triggers "load more categories" (guarded in
+        // loadMoreCategories() too), so make sure a stale hasMoreCategories
+        // from browsing "All Categories" doesn't leave a load-more spinner
+        // sentinel visible under the search results that can never resolve.
+        _hasMoreCategories.value = false
         val genreId = _uiState.value.selectedGenre?.id ?: ""
         val categoryId = _uiState.value.selectedCategory?.id ?: "*"
-        val page = portalService.fetchVodSearch(query, categoryId, 1, genreId)
+        val page = vodRepository.search(contentType(), query, categoryId, 1, genreId)
             .getOrDefault(PortalPage(emptyList(), 0))
         val visibleItems = page.items.visible()
         val rows = if (page.items.isNotEmpty()) {
@@ -349,14 +427,54 @@ class HomeViewModel @Inject constructor(
 
     private suspend fun loadDefaultHomeRows() {
         _uiState.update { it.copy(isLoading = true) }
+        // FIX (confirmed via device logcat: vertical pagination on the main
+        // carousels page permanently stuck at hasMoreCategories=false after
+        // visiting an individual category or a search, then switching back
+        // to All Categories): loadCategoryContent() and loadSearchResults()
+        // both correctly set this false (neither of them uses category-row
+        // pagination), but this function - the one that DOES use it - never
+        // reset it back, so it stayed false for the rest of the session
+        // once either of those had run, even though there were genuinely
+        // more categories to page through. Same "how many more remain"
+        // check loadMoreCategories() itself uses after appending a batch
+        // (see its own _hasMoreCategories update) - _visibleCategories may
+        // already have grown past its initial 5 from earlier pagination
+        // this session, so recomputing from current sizes here is correct
+        // where the original loadHome()-only startup check (orderedVisible
+        // .size > 5) would not be.
+        _hasMoreCategories.value = _visibleCategories.value.size < _allCategories.value.size
         val genreId = _uiState.value.selectedGenre?.id ?: ""
-        val recentPage = portalService.fetchVodList(categoryId = "*", page = 1, pageSize = 15, genreId = genreId)
-            .getOrDefault(PortalPage(emptyList(), 0))
-        val visibleRecent = recentPage.items.visible()
-        val categoryRows = coroutineScope {
-            _visibleCategories.value.map { category ->
+
+        // UPDATED (initial ~1s frame-skip on cold start, confirmed via
+        // device logcat - Choreographer reported "Skipped 64 frames!" at
+        // the exact moment isLoading flipped to false with 6 rows): this
+        // used to fetch every row's data in parallel (good - that's why the
+        // FETCH itself is fast) but wait for ALL of them via awaitAll()
+        // before a single _uiState.update - so Compose had to compose/
+        // layout 6 fully-populated carousel rows, each triggering several
+        // image loads, in one burst.
+        //
+        // Fetches still fire in parallel via async below - nothing here
+        // makes the network side any slower. What changes is the REVEAL:
+        // rows are awaited and added to state ONE AT A TIME, in the same
+        // fixed order they'll display in (Recently Added first, then each
+        // category in _visibleCategories' order) - never in "whichever
+        // network call happened to finish first" order. Awaiting an
+        // already-completed Deferred returns immediately, so by the time
+        // row 3 is revealed its fetch may well have finished minutes ago
+        // while rows 1 and 2 were being revealed - this costs nothing, it
+        // just guarantees the order on screen always matches category
+        // order regardless of network timing. Compose now only has to lay
+        // out one new row per update, spread naturally across several
+        // frames instead of six at once.
+        coroutineScope {
+            val recentDeferred = async(Dispatchers.IO) {
+                vodRepository.getList(contentType(), categoryId = "*", page = 1, pageSize = 15, genreId = genreId)
+                    .getOrDefault(PortalPage(emptyList(), 0))
+            }
+            val categoryDeferreds = _visibleCategories.value.map { category ->
                 async(Dispatchers.IO) {
-                    val page = portalService.fetchVodList(category.id, 1, 14, genreId)
+                    val page = vodRepository.getList(contentType(), category.id, 1, 14, genreId)
                         .getOrDefault(PortalPage(emptyList(), 0))
                     HomeRow(
                         id = category.id,
@@ -366,15 +484,13 @@ class HomeViewModel @Inject constructor(
                         hasMore = page.items.size >= 14
                     )
                 }
-            }.awaitAll().filter { it.items.isNotEmpty() }
-        }
-        val allRows = buildList {
-            //if (recentPage.items.isNotEmpty()) add(HomeRow("recently_added", "Recently Added", recentPage.items, hasMore = false))
-            // FIX: "Recently Added" is no longer capped. It now carries real pagination
-            // state so the row keeps loading horizontally until the portal's full
-            // recent list is exhausted (limit removed).
+            }
+
+            val revealedRows = mutableListOf<HomeRow>()
+            val recentPage = recentDeferred.await()
+            val visibleRecent = recentPage.items.visible()
             if (visibleRecent.isNotEmpty()) {
-                add(
+                revealedRows.add(
                     HomeRow(
                         id = "*",
                         title = "Recently Added",
@@ -383,17 +499,42 @@ class HomeViewModel @Inject constructor(
                         hasMore = recentPage.items.isNotEmpty()
                     )
                 )
+                _uiState.update {
+                    it.copy(isLoading = false, hero = visibleRecent.firstOrNull(), rows = revealedRows.toList())
+                }
             }
-            addAll(categoryRows)
+            for (deferred in categoryDeferreds) {
+                val row = deferred.await()
+                if (row.items.isEmpty()) continue
+                revealedRows.add(row)
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        hero = it.hero ?: visibleRecent.firstOrNull(),
+                        rows = revealedRows.toList()
+                    )
+                }
+            }
+            // Covers the edge case where every single row - Recently Added
+            // included - came back empty: isLoading needs to clear even
+            // though no row-reveal update above ever ran.
+            if (revealedRows.isEmpty()) {
+                _uiState.update { it.copy(isLoading = false) }
+            }
         }
-        _uiState.update { it.copy(isLoading = false, hero = visibleRecent.firstOrNull(), rows = allRows) }
     }
 
     private suspend fun loadCategoryContent(category: PortalCategory) {
-        _uiState.update { it.copy(isLoading = true, hero = null) }
+        // NEW: no longer nulls hero out - the grid view now keeps the same
+        // persistent hero banner the carousel view uses (see HomeScreen's
+        // CategoryGridWithHeroLayout), so blanking it here would cause the
+        // same jarring "hero disappears" jump that loadSearchResults used
+        // to cause before its own equivalent fix. Whatever hero was already
+        // showing just stays as-is.
+        _uiState.update { it.copy(isLoading = true) }
         _hasMoreCategories.value = false
         val genreId = _uiState.value.selectedGenre?.id ?: ""
-        val page = portalService.fetchVodList(category.id, 1, 14, genreId)
+        val page = vodRepository.getList(contentType(), category.id, 1, 14, genreId)
             .getOrDefault(PortalPage(emptyList(), 0))
         val row = HomeRow(
             id = category.id,
@@ -417,8 +558,19 @@ class HomeViewModel @Inject constructor(
         if (selectedCat == null || (selectedCat.id != "*" && selectedCat.id != "0")) return
         // NEW: never vertically paginate while a search is active
         if (_uiState.value.searchQuery.isNotBlank()) return
+        // FIX: set this SYNCHRONOUSLY, before launching the coroutine below -
+        // onFocus deliberately calls this repeatedly as focus moves across
+        // the last few rows (see the pagination-reachability fix elsewhere
+        // in this file), so two calls landing back-to-back before the first
+        // coroutine actually gets scheduled would BOTH pass the guard above
+        // (which was reading a value only written INSIDE that not-yet-run
+        // coroutine), both fetch the same batch of categories, and both
+        // append it - producing duplicate category rows with duplicate item
+        // IDs, which crashes LazyRow/LazyColumn's unique-key requirement.
+        // Writing the flag here, before returning control to the caller,
+        // closes that window.
+        _isLoadingMoreCategories.value = true
         viewModelScope.launch {
-            _isLoadingMoreCategories.value = true
             val genreId = _uiState.value.selectedGenre?.id ?: ""
             while (_hasMoreCategories.value) {
                 val currentSize = _visibleCategories.value.size
@@ -430,7 +582,7 @@ class HomeViewModel @Inject constructor(
                 val newRows = coroutineScope {
                     nextBatch.map { category ->
                         async(Dispatchers.IO) {
-                            val page = portalService.fetchVodList(category.id, 1, 14, genreId)
+                            val page = vodRepository.getList(contentType(), category.id, 1, 14, genreId)
                                 .getOrDefault(PortalPage(emptyList(), 0))
                             HomeRow(
                                 id = category.id,
@@ -445,7 +597,9 @@ class HomeViewModel @Inject constructor(
                 _visibleCategories.value = _visibleCategories.value + nextBatch
                 _hasMoreCategories.value = _visibleCategories.value.size < _allCategories.value.size
                 if (newRows.isNotEmpty()) {
-                    _uiState.update { it.copy(rows = it.rows + newRows) }
+                    // FIX: distinctBy as a defensive safety net, same
+                    // reasoning as loadMoreRowItems above.
+                    _uiState.update { it.copy(rows = (it.rows + newRows).distinctBy { row -> row.id }) }
                     break
                 }
             }
@@ -456,10 +610,18 @@ class HomeViewModel @Inject constructor(
     fun loadMoreRowItems(rowId: String) {
         val currentRow = _uiState.value.rows.find { it.id == rowId } ?: return
         if (currentRow.isLoadingPage || !currentRow.hasMore) return
+        // FIX: written SYNCHRONOUSLY here, before launching the coroutine -
+        // see the matching comment on loadMoreCategories above for the full
+        // explanation. onFocus calls this repeatedly as focus moves across
+        // the last few items in a row; without this, two calls landing
+        // before the first coroutine actually runs would both pass the
+        // isLoadingPage guard, both fetch the same next page, and both
+        // append it - producing duplicate item IDs within the same row,
+        // which crashes LazyRow's unique-key requirement.
+        _uiState.update { state ->
+            state.copy(rows = state.rows.map { if (it.id == rowId) it.copy(isLoadingPage = true) else it })
+        }
         viewModelScope.launch {
-            _uiState.update { state ->
-                state.copy(rows = state.rows.map { if (it.id == rowId) it.copy(isLoadingPage = true) else it })
-            }
             val nextPage = currentRow.currentPage + 1
             val genreId = _uiState.value.selectedGenre?.id ?: ""
 
@@ -468,10 +630,10 @@ class HomeViewModel @Inject constructor(
             val page = if (rowId == "search") {
                 val query = _uiState.value.searchQuery
                 val categoryId = _uiState.value.selectedCategory?.id ?: "*"
-                portalService.fetchVodSearch(query, categoryId, nextPage, genreId)
+                vodRepository.search(contentType(), query, categoryId, nextPage, genreId)
                     .getOrDefault(PortalPage(emptyList(), 0))
             } else {
-                portalService.fetchVodList(rowId, nextPage, 14, genreId)
+                vodRepository.getList(contentType(), rowId, nextPage, 14, genreId)
                     .getOrDefault(PortalPage(emptyList(), 0))
             }
             _uiState.update { state ->
@@ -479,7 +641,13 @@ class HomeViewModel @Inject constructor(
                     if (it.id == rowId) {
                         it.copy(
                             // Censored items stripped from appended pages as well
-                            items = it.items + page.items.visible(),
+                            // FIX: distinctBy as a defensive safety net on top
+                            // of the isLoadingPage race fix above - guarantees
+                            // LazyRow's unique-key requirement can never be
+                            // violated here even if a duplicate ever slipped
+                            // through some other path (e.g. a server-side
+                            // pagination quirk returning an item twice).
+                            items = (it.items + page.items.visible()).distinctBy { item -> item.id },
                             currentPage = nextPage,
                             // FIX: search rows keep paginating until a page returns 0 rows;
                             // category rows stop on a partial page as before.

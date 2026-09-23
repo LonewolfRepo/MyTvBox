@@ -32,7 +32,12 @@ import java.util.Locale
 import javax.inject.Inject
 
 data class GuideUiState(
-    val isLoading: Boolean = false,
+    // FIX ("landing page starts on no items then goes to loading" - see
+    // HomeUiState's matching fix for the full explanation): defaulting to
+    // true means the loading UI (the isLoading branch in TvGuideScreen) is
+    // what's shown on the very first frame, instead of a blank flash before
+    // init{}'s coroutine gets a dispatcher turn.
+    val isLoading: Boolean = true,
     val categories: List<PortalCategory> = emptyList(),
     val selectedCategory: PortalCategory? = null,
     val allChannels: List<PortalChannel> = emptyList(), // Cache all channels
@@ -43,7 +48,17 @@ data class GuideUiState(
     val previewChannel: PortalChannel? = null,
     val previewUrl: String? = null,
     // channel the guide should land on (last played live channel)
-    val lastPlayedChannelId: String? = null
+    val lastPlayedChannelId: String? = null,
+    // D-pad focus: wherever focus last actually landed in the channel
+    // list this session - distinct from lastPlayedChannelId (which
+    // channel is playing). Used to restore focus on a rail round-trip:
+    // "if last focused item isn't available, restore focus to first
+    // item" is exactly the guideChannels.any check where this is read in
+    // TvGuideScreen. A category or search change deliberately ignores
+    // this and uses lastPlayedChannelId instead - those are fresh
+    // navigations, not a continuation of wherever the user's eyes
+    // happened to be.
+    val lastFocusedChannelId: String? = null
 )
 
 @HiltViewModel
@@ -160,6 +175,19 @@ class TvGuideViewModel @Inject constructor(
         val isAll = category.id == "*" || category.id == "0" || category.id == "all"
         val filtered = if (isAll) _uiState.value.allChannels else _uiState.value.allChannels.filter { it.genreId == category.id }
         _uiState.update { it.copy(selectedCategory = category, channels = filtered) }
+    }
+
+    // D-pad focus: called by GuideChannelRow whenever a row gains real
+    // on-screen focus (see its own onFocusChanged) - the single source of
+    // truth for "restore to last focused item" on a rail round-trip (see
+    // GuideUiState.lastFocusedChannelId's own doc comment). The equality
+    // check avoids a redundant state emission (and recomposition) on
+    // every focus event when the value hasn't actually changed, e.g. focus
+    // moving within the same row's own children.
+    fun setLastFocusedChannel(channelId: String) {
+        if (_uiState.value.lastFocusedChannelId != channelId) {
+            _uiState.update { it.copy(lastFocusedChannelId = channelId) }
+        }
     }
 
     fun ensureEpg(channelId: String) {

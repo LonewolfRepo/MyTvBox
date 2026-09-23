@@ -1,5 +1,6 @@
 package com.itv.blockbuster.ui.vod
 
+import android.graphics.Bitmap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -17,7 +18,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -33,6 +36,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -41,9 +45,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -53,6 +60,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.itv.blockbuster.data.local.entity.PlaybackProgressEntity
 import com.itv.blockbuster.domain.model.PortalVodItem
 import com.itv.blockbuster.ui.navigation.FormFactor
@@ -64,6 +72,7 @@ import com.itv.blockbuster.ui.theme.BbSurface
 import com.itv.blockbuster.ui.theme.BbTextMuted
 import com.itv.blockbuster.ui.theme.BbTextPrimary
 import com.itv.blockbuster.ui.theme.BbTextSecondary
+import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Locale
 
@@ -75,6 +84,35 @@ fun VodEpisodesScreen(
 ) {
     val state by viewModel.state.collectAsState()
     val isPortrait = rememberFormFactor() == FormFactor.MOBILE_PORTRAIT
+
+    // D-pad focus: this screen has no rail (it's a NoRailRoutes screen, same
+    // as VodDetailScreen/PlayerScreen/CatchupScreen), so it needs to claim
+    // focus onto something itself rather than relying on a rail handoff.
+    // FIX: there was previously NO initial-focus logic here at all - a
+    // D-pad user landing on this screen could find nothing focused until
+    // they pressed a direction key. Uses the exact same
+    // FocusRequester+retry-loop shape as VodDetailScreen's own
+    // playFocusRequester, but targets the SAME episode the Play/Resume
+    // button on the detail page would play (state.playTarget.episode) -
+    // i.e. arriving here already lands you on "continue watching" rather
+    // than always the top of the list.
+    val listState = rememberLazyListState()
+    val targetEpisodeFocusRequester = remember { FocusRequester() }
+    val targetEpisodeId = state.playTarget?.episode?.id
+    LaunchedEffect(state.item != null, state.selectedSeason?.id, targetEpisodeId) {
+        if (state.item == null || targetEpisodeId == null) return@LaunchedEffect
+        // Give the freshly-composed layout a beat to lay out before
+        // requesting, same as VodDetailScreen - and re-check the episode
+        // list fresh on each attempt, since it may still be loading for
+        // the target's season when this effect first starts.
+        repeat(20) { attempt ->
+            delay(50)
+            val index = state.episodes.indexOfFirst { it.id == targetEpisodeId }
+            if (index < 0) return@repeat
+            runCatching { listState.scrollToItem(index) }
+            if (targetEpisodeFocusRequester.runCatching { requestFocus() }.isSuccess) return@LaunchedEffect
+        }
+    }
 
     // FIX: Refresh playback progress whenever we return from the player.
     // Without this, episodeProgressMap stayed as loaded at first composition
@@ -129,12 +167,18 @@ fun VodEpisodesScreen(
                 if (isPortrait) {
                     PortraitEpisodes(
                         state = state,
+                        listState = listState,
+                        targetEpisodeId = targetEpisodeId,
+                        targetEpisodeFocusRequester = targetEpisodeFocusRequester,
                         onSelectSeason = { viewModel.selectSeason(it) },
                         onPlay = { viewModel.playEpisode(it, onPlay) }
                     )
                 } else {
                     LandscapeEpisodes(
                         state = state,
+                        listState = listState,
+                        targetEpisodeId = targetEpisodeId,
+                        targetEpisodeFocusRequester = targetEpisodeFocusRequester,
                         onSelectSeason = { viewModel.selectSeason(it) },
                         onPlay = { viewModel.playEpisode(it, onPlay) }
                     )
@@ -150,6 +194,9 @@ fun VodEpisodesScreen(
 @Composable
 private fun LandscapeEpisodes(
     state: VodDetailState,
+    listState: LazyListState,
+    targetEpisodeId: String?,
+    targetEpisodeFocusRequester: FocusRequester,
     onSelectSeason: (PortalVodItem) -> Unit,
     onPlay: (PortalVodItem) -> Unit
 ) {
@@ -181,6 +228,7 @@ private fun LandscapeEpisodes(
         }
         // Episodes column (right)
         LazyColumn(
+            state = listState,
             modifier = Modifier.weight(0.68f).fillMaxHeight()
         ) {
             item {
@@ -197,6 +245,9 @@ private fun LandscapeEpisodes(
                     episode = episode,
                     seasonNumber = state.selectedSeason?.seasonNumber ?: "",
                     progress = state.episodeProgressMap[episode.id],
+                    // D-pad focus: this is the episode state.playTarget
+                    // points at - see VodEpisodesScreen's own doc comment.
+                    focusRequester = if (episode.id == targetEpisodeId) targetEpisodeFocusRequester else null,
                     onPlay = { onPlay(episode) }
                 )
             }
@@ -211,6 +262,9 @@ private fun LandscapeEpisodes(
 @Composable
 private fun PortraitEpisodes(
     state: VodDetailState,
+    listState: LazyListState,
+    targetEpisodeId: String?,
+    targetEpisodeFocusRequester: FocusRequester,
     onSelectSeason: (PortalVodItem) -> Unit,
     onPlay: (PortalVodItem) -> Unit
 ) {
@@ -244,12 +298,16 @@ private fun PortraitEpisodes(
             }
         }
         // Episodes list
-        LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp)
+        ) {
             items(state.episodes, key = { it.id }) { episode ->
                 EpisodeCard(
                     episode = episode,
                     seasonNumber = state.selectedSeason?.seasonNumber ?: "",
                     progress = state.episodeProgressMap[episode.id],
+                    focusRequester = if (episode.id == targetEpisodeId) targetEpisodeFocusRequester else null,
                     onPlay = { onPlay(episode) }
                 )
             }
@@ -304,6 +362,9 @@ private fun EpisodeCard(
     episode: PortalVodItem,
     seasonNumber: String,
     progress: PlaybackProgressEntity?,
+    // D-pad focus: set only for the one episode state.playTarget points at
+    // - see VodEpisodesScreen's own doc comment.
+    focusRequester: FocusRequester? = null,
     onPlay: () -> Unit
 ) {
     var focused by remember { mutableStateOf(false) }
@@ -318,6 +379,7 @@ private fun EpisodeCard(
                     .background(BbCard.copy(alpha = 0.4f))
                 else Modifier
             )
+            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             .clickable(onClick = onPlay)
             .focusable()
             .onFocusChanged { focused = it.isFocused }
@@ -329,8 +391,15 @@ private fun EpisodeCard(
                 .clip(RoundedCornerShape(8.dp)).background(BbCard)
         ) {
             if (episode.logoUrl.isNotEmpty()) {
+                val context = LocalContext.current
                 AsyncImage(
-                    model = episode.logoUrl, contentDescription = null,
+                    model = remember(episode.logoUrl) {
+                        ImageRequest.Builder(context)
+                            .data(episode.logoUrl)
+                            .bitmapConfig(Bitmap.Config.RGB_565)
+                            .build()
+                    },
+                    contentDescription = null,
                     modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop
                 )
             }

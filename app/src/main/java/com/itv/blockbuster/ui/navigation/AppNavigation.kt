@@ -1,6 +1,9 @@
 package com.itv.blockbuster.ui.navigation
 
 import android.content.res.Configuration
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,6 +16,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
@@ -41,11 +45,11 @@ import com.itv.blockbuster.ui.settings.SettingsScreen
 import com.itv.blockbuster.ui.shell.AppShell
 import com.itv.blockbuster.ui.theme.BbAccent
 import com.itv.blockbuster.ui.theme.BbBackground
-import com.itv.blockbuster.ui.vod.VodBrowserScreen
 import com.itv.blockbuster.ui.vod.VodEpisodesScreen
 import com.itv.blockbuster.ui.vod.VodDetailScreen
 import com.itv.blockbuster.ui.adult.AdultHubScreen
 import com.itv.blockbuster.data.session.AdultSessionManager
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 object Routes {
@@ -95,6 +99,31 @@ fun NavHostController.navigateToSection(route: String) {
 
 private fun encodeUrl(url: String): String =
     try { java.net.URLEncoder.encode(url, "UTF-8") } catch (e: Exception) { url }
+
+/**
+ * UPDATED (player-open latency): this used to await StreamValidator.isReachable(url)
+ * - a full extra network round trip - BEFORE navigating, on every single
+ * playback attempt, purely so a failure could show "Stream Not Available"
+ * instead of a flash of an empty player screen. That meant every
+ * SUCCESSFUL playback (the common case) also paid for that round trip
+ * before the player even opened.
+ *
+ * Now navigation is immediate. The player screen itself shows a
+ * "Connecting..." overlay while ExoPlayer buffers (see PlayerScreen's
+ * DisposableEffect/Player.Listener.onPlayerError), and pops back out with
+ * the same "Stream Not Available" toast if playback actually fails -
+ * giving the same failure-case UX without taxing the success case with a
+ * network call it doesn't need.
+ */
+private fun NavHostController.navigateToPlayerIfReachable(
+    scope: CoroutineScope,
+    context: android.content.Context,
+    url: String,
+    channelId: String = "none",
+    videoId: String = "none"
+) {
+    navigate("player/${encodeUrl(url)}/$channelId/$videoId")
+}
 
 /**
  * FIX: Hard gate for any Adult sub-screen (Adult Live TV, Adult VOD Browser) that
@@ -169,6 +198,7 @@ fun AppNavigation(
 ) {
     val navController = rememberNavController()
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val startupViewModel: StartupViewModel = hiltViewModel()
     val shellViewModel: AppShellViewModel = hiltViewModel()
     val adultSessionManager = shellViewModel.adultSessionManager
@@ -218,10 +248,28 @@ fun AppNavigation(
     // rail for the current route - full-screen routes like the profile picker
     // and video player render only their own content.
     AppShell(navController) {
+        // FIX ("going from browsing to VOD details feels like waiting for
+        // the rail to collapse, then snapping to the new screen"): NavHost
+        // previously had no transition at all, so the actual content swap
+        // was instant - the only thing that visibly animated during that
+        // navigation was the rail itself shrinking from RailCollapsedWidth
+        // to 0dp (VOD detail/episodes are NoRailRoutes, so showChrome flips
+        // false and railWidth's default spring animates it away). One
+        // animated thing plus one instant thing reads as two sequential
+        // steps rather than one motion. A plain crossfade, tuned to roughly
+        // the same duration as the rail's own default spring settle time,
+        // means both the rail collapsing and the new screen arriving happen
+        // together instead of the content swap looking like an abrupt
+        // afterthought once the rail finishes.
+        val screenTransitionSpec = tween<Float>(durationMillis = 260)
         NavHost(
             navController = navController,
             // CHANGE 2: when the picker is skipped, open the configured section directly
-            startDestination = if (startAtPicker) Routes.PROFILE_PICKER else landingRoute
+            startDestination = if (startAtPicker) Routes.PROFILE_PICKER else landingRoute,
+            enterTransition = { fadeIn(animationSpec = screenTransitionSpec) },
+            exitTransition = { fadeOut(animationSpec = screenTransitionSpec) },
+            popEnterTransition = { fadeIn(animationSpec = screenTransitionSpec) },
+            popExitTransition = { fadeOut(animationSpec = screenTransitionSpec) }
         ) {
             // ... (Keep all existing composable routes exactly as they are) ...
             composable(Routes.PROFILE_PICKER) {
@@ -241,32 +289,46 @@ fun AppNavigation(
                 HomeScreen(
                     onOpenPortals = { navController.navigateToSection(Routes.SERVERS) },
                     onOpenVodDetail = { itemId, type -> navController.navigate("vod_detail/$itemId/$type") },
-                    route = Routes.HOME
+                    route = Routes.HOME,
+                    contentType = "home"
                 )
             }
-            // FIX: Movies explicitly passes "vod" contentType
+            // NEW: Movies and TV Shows now reuse HomeScreen/HomeViewModel
+            // directly (same hero banner, 2-row viewport, search, filters,
+            // pagination reachability fixes, etc.) instead of the separate
+            // VodBrowserScreen/VodBrowserViewModel, which had fallen behind
+            // on all of that. contentType is the only thing that actually
+            // differs - HomeViewModel filters fetched items by isSeries and
+            // reads the SAME "order_vod"/"order_series" category
+            // sort/visibility settings VodBrowserViewModel already used, so
+            // existing user customization carries over unchanged. VodBrowserScreen/
+            // VodBrowserViewModel are left in place but unused rather than
+            // deleted, in case of an issue that needs a quick revert.
             composable(Routes.MOVIES) {
-                VodBrowserScreen(
-                    contentType = "vod",
-                    onOpenDetail = { itemId -> navController.navigate("vod_detail/$itemId/vod") }
+                HomeScreen(
+                    onOpenPortals = { navController.navigateToSection(Routes.SERVERS) },
+                    onOpenVodDetail = { itemId, type -> navController.navigate("vod_detail/$itemId/$type") },
+                    route = Routes.MOVIES,
+                    contentType = "vod"
                 )
             }
-            // FIX: TV Shows explicitly passes "series" contentType
             composable(Routes.TV_SHOWS) {
-                VodBrowserScreen(
-                    contentType = "series",
-                    onOpenDetail = { itemId -> navController.navigate("vod_detail/$itemId/series") }
+                HomeScreen(
+                    onOpenPortals = { navController.navigateToSection(Routes.SERVERS) },
+                    onOpenVodDetail = { itemId, type -> navController.navigate("vod_detail/$itemId/$type") },
+                    route = Routes.TV_SHOWS,
+                    contentType = "series"
                 )
             }
             composable(Routes.LIVE_TV) {
                 LiveTvScreen(
-                    onPlayChannel = { url, channelId -> navController.navigate("player/${encodeUrl(url)}/$channelId/none") },
+                    onPlayChannel = { url, channelId -> navController.navigateToPlayerIfReachable(scope, context, url, channelId = channelId) },
                     onOpenCatchup = { channelId -> navController.navigate("catchup/$channelId") }
                 )
             }
             composable(Routes.TV_GUIDE) {
                 TvGuideScreen(
-                    onPlayLive = { url, channelId -> navController.navigate("player/${encodeUrl(url)}/$channelId/none") },
+                    onPlayLive = { url, channelId -> navController.navigateToPlayerIfReachable(scope, context, url, channelId = channelId) },
                     onOpenCatchup = { channelId -> navController.navigate("catchup/$channelId") }
                 )
             }
@@ -274,12 +336,12 @@ fun AppNavigation(
                 route = Routes.CATCHUP,
                 arguments = listOf(navArgument("channelId") { type = NavType.StringType })
             ) {
-                CatchupScreen(onPlay = { url -> navController.navigate("player/${encodeUrl(url)}/none/none") })
+                CatchupScreen(onPlay = { url -> navController.navigateToPlayerIfReachable(scope, context, url) })
             }
             composable(Routes.MY_LIST) {
                 FavoritesHubScreen(
                     onPlayLive = { url, channelId ->
-                        navController.navigate("player/${encodeUrl(url)}/$channelId/none")
+                        navController.navigateToPlayerIfReachable(scope, context, url, channelId = channelId)
                     },
                     onOpenVod = { itemId, type ->
                         navController.navigate("vod_detail/$itemId/$type")
@@ -289,7 +351,7 @@ fun AppNavigation(
             composable(Routes.RECENT) {
                 RecentsHubScreen(
                     onPlayLive = { url, channelId ->
-                        navController.navigate("player/${encodeUrl(url)}/$channelId/none")
+                        navController.navigateToPlayerIfReachable(scope, context, url, channelId = channelId)
                     },
                     onOpenVod = { itemId, type ->
                         navController.navigate("vod_detail/$itemId/$type")
@@ -311,14 +373,15 @@ fun AppNavigation(
                 // to the password screen if it isn't unlocked.
                 AdultGate(navController, adultSessionManager, Routes.ADULT_LIVE_TV) {
                     LiveTvScreen(
-                        onPlayChannel = { url, channelId -> navController.navigate("player/${encodeUrl(url)}/$channelId/none") },
+                        onPlayChannel = { url, channelId -> navController.navigateToPlayerIfReachable(scope, context, url, channelId = channelId) },
                         onOpenCatchup = { channelId -> navController.navigate("catchup/$channelId") },
                         route = Routes.ADULT_LIVE_TV
                     )
                 }
             }
-            // FIX: Switched from HomeScreen to VodBrowserScreen to prevent lifecycle freezing
-            // and to provide a consistent carousel UI for Adult VOD matching the Movies section.
+            // NOTE: uses HomeScreen (not a separate VodBrowserScreen) so Adult VOD
+            // gets the same hero/carousel UI as the rest of the app - same pattern
+            // Movies/TV Shows now use too (see Routes.MOVIES/TV_SHOWS above).
             composable(Routes.ADULT_VOD_BROWSER) {
                 // FIX: same unlock gate as Adult Live TV above - see comment there.
                 AdultGate(navController, adultSessionManager, Routes.ADULT_VOD_BROWSER) {
@@ -395,7 +458,7 @@ fun AppNavigation(
                 val contentType = backStackEntry.arguments?.getString("contentType") ?: "vod"
                 val itemId = backStackEntry.arguments?.getString("itemId") ?: ""
                 VodDetailScreen(
-                    onPlay = { url -> navController.navigate("player/${encodeUrl(url)}/none/none") },
+                    onPlay = { url -> navController.navigateToPlayerIfReachable(scope, context, url) },
                     onOpenEpisodes = {
                         navController.navigate("vod_episodes/$itemId/$contentType")
                     }
@@ -409,7 +472,7 @@ fun AppNavigation(
                 )
             ) {
                 VodEpisodesScreen(
-                    onPlay = { url -> navController.navigate("player/${encodeUrl(url)}/none/none") },
+                    onPlay = { url -> navController.navigateToPlayerIfReachable(scope, context, url) },
                     onBack = { navController.popBackStack() }
                 )
             }

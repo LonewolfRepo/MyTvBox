@@ -2,6 +2,7 @@ package com.itv.blockbuster.data.player
 
 import android.content.Context
 import androidx.media3.common.MediaItem
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import com.itv.blockbuster.domain.model.EpgProgram
 import com.itv.blockbuster.domain.model.PortalChannel
@@ -17,7 +18,30 @@ import javax.inject.Singleton
 class PlaybackManager @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
-    val player: ExoPlayer by lazy { ExoPlayer.Builder(context).build() }
+    // UPDATED: was ExoPlayer.Builder(context).build() with 100% stock
+    // buffering defaults - specifically DefaultLoadControl's default
+    // bufferForPlaybackMs (2500ms) and bufferForPlaybackAfterRebufferMs
+    // (5000ms), i.e. ExoPlayer waited for 2.5s of buffered media before
+    // ever starting playback, even on a fast connection that could have
+    // started sooner. min/max buffer targets (how much it buffers AHEAD
+    // once playing) are left at their defaults - only the "how much do I
+    // need before I'll START/RESUME playback" thresholds are lowered, so
+    // steady-state resilience against network hiccups mid-playback is
+    // unaffected; only the initial/resume wait is shorter.
+    private val loadControl = DefaultLoadControl.Builder()
+        .setBufferDurationsMs(
+            DefaultLoadControl.DEFAULT_MIN_BUFFER_MS,
+            DefaultLoadControl.DEFAULT_MAX_BUFFER_MS,
+            1000,  // bufferForPlaybackMs - was the default 2500ms
+            2000   // bufferForPlaybackAfterRebufferMs - was the default 5000ms
+        )
+        .build()
+
+    val player: ExoPlayer by lazy {
+        ExoPlayer.Builder(context)
+            .setLoadControl(loadControl)
+            .build()
+    }
 
     // NEW: StateFlow mirror of isFullscreenActive so Compose can react to
     // fullscreen enter/exit and re-bind the PIP surface at the right time.
@@ -55,9 +79,6 @@ class PlaybackManager @Inject constructor(
     var currentEpisodeName: String = ""
     var currentVideoId: String = ""
     var episodeQueue: List<PortalVodItem> = emptyList()
-
-    // Skip resume and play from beginning
-    var restartFromBeginning: Boolean = false
 
     // Resume target passed from VodDetailViewModel at play-click time.
     // -1 = no resume. Player seeks to this once STATE_READY, then resets to -1.

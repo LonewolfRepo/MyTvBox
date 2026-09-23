@@ -52,9 +52,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -74,6 +77,8 @@ import com.itv.blockbuster.ui.theme.BbTextMuted
 import com.itv.blockbuster.ui.theme.BbTextPrimary
 import com.itv.blockbuster.ui.theme.BbTextSecondary
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.Random
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -89,6 +94,30 @@ fun ServersScreen(
     var serverToDelete by remember { mutableStateOf<Server?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
     val snackbarScope = rememberCoroutineScope()
+
+    // FIX (issue 2 - "set focus on active server when Portals is opened,
+    // fall back to Add Portal if there is no active server"): nothing
+    // previously requested focus at all here, so Compose's own default
+    // initial-focus search just picked the FIRST focusable element in
+    // composition order - the "Add Portal" button, declared above the
+    // server list - regardless of whether an active server existed.
+    val addPortalFocusRequester = remember { FocusRequester() }
+    val activeServerFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        // `servers`/`activeServer` are stateIn(..., emptyList()/null) -
+        // that's a real, guaranteed placeholder value for at least the
+        // first composition, before the underlying (fast, local-DB) Flow
+        // has had a chance to emit its actual contents. Waiting briefly
+        // for a genuine non-empty `servers` list (or timing out, which
+        // just means there really are zero portals configured) avoids
+        // grabbing focus based on that transient default and landing on
+        // Add Portal even when an active server actually exists.
+        withTimeoutOrNull(500) {
+            snapshotFlow { servers }.first { it.isNotEmpty() }
+        }
+        val target = if (activeServer != null) activeServerFocusRequester else addPortalFocusRequester
+        runCatching { target.requestFocus() }
+    }
 
     LaunchedEffect(uiState.errorMessage, uiState.successMessage) {
         uiState.errorMessage?.let {
@@ -151,7 +180,8 @@ fun ServersScreen(
             Button(
                 onClick = { serverToEdit = Server(name = "", host = "", mac = generateDefaultMac()) },
                 colors = ButtonDefaults.buttonColors(containerColor = BbAccent),
-                enabled = !uiState.isConnecting
+                enabled = !uiState.isConnecting,
+                modifier = Modifier.focusRequester(addPortalFocusRequester)
             ) {
                 if (uiState.isConnecting) {
                     CircularProgressIndicator(
@@ -193,6 +223,7 @@ fun ServersScreen(
                             server = server,
                             isActive = isActive,
                             isConnecting = uiState.isConnecting,
+                            focusRequester = if (isActive) activeServerFocusRequester else null,
                             onActivate = {
                                 snackbarScope.launch {
                                     snackbarHostState.showSnackbar(
@@ -223,7 +254,10 @@ fun PortalCard(
     isConnecting: Boolean,
     onActivate: () -> Unit,
     onEdit: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    // FIX (issue 2): lets ServersScreen request focus onto specifically
+    // the active server's card on initial open - see its own comment.
+    focusRequester: FocusRequester? = null
 ) {
     var cardFocused by remember { mutableStateOf(false) }
     var editFocused by remember { mutableStateOf(false) }
@@ -251,6 +285,7 @@ fun PortalCard(
                     .width(cardWidth)
                     .height(56.dp)
                     .clip(RoundedCornerShape(28.dp))
+                    .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
                     .background(
                         when {
                             cardFocused -> BbAccent

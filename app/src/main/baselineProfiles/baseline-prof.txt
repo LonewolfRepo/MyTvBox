@@ -1,0 +1,75 @@
+# Baseline profile for com.itv.blockbuster
+#
+# WHY THIS EXISTS: multiple device System Trace captures during this
+# investigation (both debug and release builds) showed thousands of
+# VerifyClass and JIT-compiling events firing live, during actual use,
+# concentrated exactly around cold start and the first time a screen's
+# content renders. Every class listed below was CONFIRMED present in that
+# trace evidence (see the CarouselComponentsKt/HomeViewModel/FocusRegistry
+# etc. findings throughout this conversation) - this isn't a guessed list.
+#
+# WHAT THIS FILE DOES: AGP automatically picks up
+# src/main/baselineProfiles/baseline-prof.txt and bundles it into the APK
+# (assets/dexopt/baseline.prof) with no extra Gradle plugin required for a
+# manually-authored profile like this one. Combined with the
+# androidx.profileinstaller runtime dependency (see build.gradle.kts), this
+# lets ART verify/AOT-compile these classes AHEAD OF TIME (at install time)
+# instead of the runtime discovering and JIT-compiling them live while the
+# user is trying to scroll.
+#
+# FORMAT NOTE: these are plain class-descriptor lines (no H/S/P method
+# flags), which is valid baseline profile syntax specifically for
+# requesting eager VERIFICATION of a class - deliberately chosen over
+# hand-writing individual method signatures (HSPL...->method(...)V lines),
+# since getting a JVM method descriptor wrong by hand (parameter/return type
+# encoding) either gets silently ignored or could invalidate the whole file,
+# and I have no way to compile-verify this file in the environment this was
+# authored in. Class-level entries directly target VerifyClass - which was
+# the single largest confirmed cost category across every trace - with much
+# lower risk of a subtly malformed line.
+#
+# THIS IS A STARTING POINT, NOT A COMPLETE PROFILE: a real macrobenchmark-
+# generated profile (via the androidx.baselineprofile Gradle plugin, run
+# against a connected device/emulator exercising cold start + Home scroll +
+# VOD detail open) would be more precise, capture exact hot methods (not
+# just whole classes), and automatically merge in the profiles that Compose
+# and other libraries already ship in their own AARs, which this hand-
+# curated file does NOT include. Worth setting up if cold start still needs
+# further work after this.
+
+# --- Our own app code (confirmed via JIT compiling entries in trace) ---
+Lcom/itv/blockbuster/ui/components/CarouselComponentsKt;
+Lcom/itv/blockbuster/ui/home/HomeScreenKt;
+Lcom/itv/blockbuster/ui/home/HomeViewModel;
+Lcom/itv/blockbuster/ui/vod/VodDetailScreenKt;
+Lcom/itv/blockbuster/ui/vod/VodDetailViewModel;
+Lcom/itv/blockbuster/ui/vod/VodBrowserScreenKt;
+Lcom/itv/blockbuster/ui/shell/AppShellKt;
+Lcom/itv/blockbuster/util/FocusRegistry;
+Lcom/itv/blockbuster/data/repository/StalkerPortalService;
+Lcom/itv/blockbuster/data/player/PlaybackManager;
+
+# --- Compose Foundation lazy-list / scroll / focus machinery (confirmed
+# heavily JIT-compiled - this is the core of every carousel and row list
+# in the app, exercised for the first time exactly at cold start) ---
+Landroidx/compose/foundation/lazy/LazyListMeasureKt;
+Landroidx/compose/foundation/lazy/LazyListKt;
+Landroidx/compose/foundation/lazy/LazyListItemProviderImpl;
+Landroidx/compose/foundation/lazy/LazyListState;
+Landroidx/compose/foundation/lazy/LazyListItemProviderKt;
+Landroidx/compose/foundation/gestures/ScrollableElement;
+Landroidx/compose/foundation/gestures/ContentInViewNode;
+Landroidx/compose/foundation/relocation/BringIntoViewResponderNode;
+Landroidx/compose/ui/node/LayoutNodeLayoutDelegate;
+Landroidx/compose/ui/layout/LayoutNodeSubcompositionsState;
+Landroidx/compose/ui/focus/FocusTransactionsKt;
+
+# --- Coil image loading pipeline (confirmed heavily JIT-compiled -
+# every poster/thumbnail/hero image goes through this) ---
+Lcoil/request/ImageRequest;
+Lcoil/request/ImageRequest$Builder;
+Lcoil/compose/AsyncImagePainter;
+Lcoil/compose/AsyncImageKt;
+Lcoil/decode/BitmapFactoryDecoder;
+Lcoil/ImageLoader;
+Lcoil/disk/DiskLruCache;

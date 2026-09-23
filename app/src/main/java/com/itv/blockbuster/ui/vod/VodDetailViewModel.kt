@@ -18,6 +18,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 
 // NEW: Smart play target computed after seasons load
@@ -56,6 +58,27 @@ class VodDetailViewModel @Inject constructor(
 
     private val _state = MutableStateFlow(VodDetailState())
     val state: StateFlow<VodDetailState> = _state.asStateFlow()
+
+    // Guards computePlayTarget() against running concurrently with itself.
+    // On first entering this screen, init{}'s own loadSeasons() and the
+    // screen's DisposableEffect both end up calling computePlayTarget()
+    // near-simultaneously (Lifecycle.addObserver() fires a synthetic
+    // ON_RESUME immediately since the screen is already RESUMED by the time
+    // the observer is added - see VodDetailScreen's DisposableEffect). Both
+    // calls read state.selectedSeason as null before either has written it
+    // back, so both miss episodesFor()'s cache check and both fetch the
+    // season's episodes over the network - which is what caused every
+    // episode page to be requested twice. The mutex doesn't try to guess
+    // which caller is "the real one" (an earlier attempt at that, gating on
+    // the screen's first ON_RESUME, backfired - it also suppressed
+    // legitimate refreshes on every later return to this screen, since
+    // Compose Navigation disposes and fully recomposes this screen's
+    // composable - and its DisposableEffect - on every visit, not just the
+    // first). It just serializes the two calls: whichever runs first does
+    // the real fetch, and the second one - now running after the first has
+    // already written selectedSeason/episodes back to state - hits
+    // episodesFor()'s cache and skips the network call entirely.
+    private val computePlayTargetMutex = Mutex()
 
     init {
         val item = VodNavigationCache.currentItem
@@ -153,134 +176,134 @@ class VodDetailViewModel @Inject constructor(
 
     private fun computePlayTarget(item: PortalVodItem, seasons: List<PortalVodItem>) {
         viewModelScope.launch {
-            val profileId = prefs.activeProfileIdFlow.first()
-            val serverId = sessionManager.activePortal.value?.serverId ?: 0
+            computePlayTargetMutex.withLock {
+                val profileId = prefs.activeProfileIdFlow.first()
+                val serverId = sessionManager.activePortal.value?.serverId ?: 0
 
-            // Sort seasons ascending by seasonNumber
-            val sortedSeasons = seasons.sortedBy { it.seasonNumber.toIntOrNull() ?: Int.MAX_VALUE }
+                // Sort seasons ascending by seasonNumber
+                val sortedSeasons = seasons.sortedBy { it.seasonNumber.toIntOrNull() ?: Int.MAX_VALUE }
 
-            // STEP 1: Fetch most recent progress for the movie
-            val progressList = vodRepository.getProgressForMovie(profileId, serverId, item.id)
-            val latestProgress = progressList.maxByOrNull { it.timestamp }
+                // STEP 1: Fetch most recent progress for the movie
+                val progressList = vodRepository.getProgressForMovie(profileId, serverId, item.id)
+                val latestProgress = progressList.maxByOrNull { it.timestamp }
 
-            // STEP 2: No progress → play least season / least episode
-            if (latestProgress == null) {
-                applyFirstSeasonTarget(item, sortedSeasons, progressList)
-                return@launch
-            }
+                // STEP 2: No progress → play least season / least episode
+                if (latestProgress == null) {
+                    applyFirstSeasonTarget(item, sortedSeasons, progressList)
+                    return@launch
+                }
 
-            // STEP 3: Found progress → locate season + episode
-            val targetSeason = sortedSeasons.find { it.id == latestProgress.seasonId }
-            if (targetSeason == null) {
-                applyFirstSeasonTarget(item, sortedSeasons, progressList)
-                return@launch
-            }
-            val episodesResult = vodRepository.getEpisodes(item.id, targetSeason.id)
-            val sortedEps = episodesResult.getOrDefault(emptyList())
-                .sortedBy { it.episodeNumber.toIntOrNull() ?: Int.MAX_VALUE }
-            val seasonProgress = progressList.filter { it.seasonId == targetSeason.id }
-            val progressByEpisode = seasonProgress.associateBy { it.episodeId }
-            val targetEpisode = sortedEps.find { it.id == latestProgress.episodeId }
-            if (targetEpisode == null) {
-                val firstEp = sortedEps.firstOrNull()
-                if (firstEp != null) {
+                // STEP 3: Found progress → locate season + episode
+                val targetSeason = sortedSeasons.find { it.id == latestProgress.seasonId }
+                if (targetSeason == null) {
+                    applyFirstSeasonTarget(item, sortedSeasons, progressList)
+                    return@launch
+                }
+                val sortedEps = episodesFor(item, targetSeason)
+                val seasonProgress = progressList.filter { it.seasonId == targetSeason.id }
+                val progressByEpisode = seasonProgress.associateBy { it.episodeId }
+                val targetEpisode = sortedEps.find { it.id == latestProgress.episodeId }
+                if (targetEpisode == null) {
+                    val firstEp = sortedEps.firstOrNull()
+                    if (firstEp != null) {
+                        _state.update {
+                            it.copy(
+                                selectedSeason = targetSeason,
+                                episodes = sortedEps,
+                                episodeProgressMap = progressByEpisode,
+                                playTarget = PlayTarget(
+                                    season = targetSeason, episode = firstEp,
+                                    isResume = false, seekMs = 0L,
+                                    label = "Play S${targetSeason.seasonNumber}E${firstEp.episodeNumber}"
+                                )
+                            )
+                        }
+                    }
+                    return@launch
+                }
+                val epProgress = progressByEpisode[targetEpisode.id]
+                if (epProgress == null) {
+                    // No progress for this episode → play from beginning
                     _state.update {
                         it.copy(
-                            selectedSeason = targetSeason,
-                            episodes = sortedEps,
+                            selectedSeason = targetSeason, episodes = sortedEps,
                             episodeProgressMap = progressByEpisode,
                             playTarget = PlayTarget(
-                                season = targetSeason, episode = firstEp,
+                                season = targetSeason, episode = targetEpisode,
                                 isResume = false, seekMs = 0L,
-                                label = "Play S${targetSeason.seasonNumber}E${firstEp.episodeNumber}"
-                            )
-                        )
-                    }
-                }
-                return@launch
-            }
-            val epProgress = progressByEpisode[targetEpisode.id]
-            if (epProgress == null) {
-                // No progress for this episode → play from beginning
-                _state.update {
-                    it.copy(
-                        selectedSeason = targetSeason, episodes = sortedEps,
-                        episodeProgressMap = progressByEpisode,
-                        playTarget = PlayTarget(
-                            season = targetSeason, episode = targetEpisode,
-                            isResume = false, seekMs = 0L,
-                            label = "Play S${targetSeason.seasonNumber}E${targetEpisode.episodeNumber}"
-                        )
-                    )
-                }
-                return@launch
-            }
-            val posMs = epProgress.positionMs
-            val durMs = epProgress.durationMs
-            val isNearlyFinished = durMs > 0 && (durMs - posMs) <= 30_000
-            val isPartiallyPlayed = posMs > 5_000 && !isNearlyFinished
-
-            // STEP 4: Partially played → Resume
-            if (isPartiallyPlayed) {
-                _state.update {
-                    it.copy(
-                        selectedSeason = targetSeason, episodes = sortedEps,
-                        episodeProgressMap = progressByEpisode,
-                        playTarget = PlayTarget(
-                            season = targetSeason, episode = targetEpisode,
-                            isResume = true, seekMs = posMs,
-                            label = "Resume S${targetSeason.seasonNumber}E${targetEpisode.episodeNumber}"
-                        )
-                    )
-                }
-                return@launch
-            }
-
-            // STEP 5: Fully/nearly played → next episode in same season?
-            val epIndex = sortedEps.indexOf(targetEpisode)
-            if (epIndex + 1 < sortedEps.size) {
-                val nextEp = sortedEps[epIndex + 1]
-                _state.update {
-                    it.copy(
-                        selectedSeason = targetSeason, episodes = sortedEps,
-                        episodeProgressMap = progressByEpisode,
-                        playTarget = PlayTarget(
-                            season = targetSeason, episode = nextEp,
-                            isResume = false, seekMs = 0L,
-                            label = "Play S${targetSeason.seasonNumber}E${nextEp.episodeNumber}"
-                        )
-                    )
-                }
-                return@launch
-            }
-
-            // STEP 6: Last episode of season → advance to next season
-            val seasonIndex = sortedSeasons.indexOf(targetSeason)
-            if (seasonIndex + 1 < sortedSeasons.size) {
-                val nextSeason = sortedSeasons[seasonIndex + 1]
-                val nextEpsResult = vodRepository.getEpisodes(item.id, nextSeason.id)
-                val sortedNextEps = nextEpsResult.getOrDefault(emptyList())
-                    .sortedBy { it.episodeNumber.toIntOrNull() ?: Int.MAX_VALUE }
-                val firstNextEp = sortedNextEps.firstOrNull()
-                if (firstNextEp != null) {
-                    val nextSeasonProgress = progressList.filter { it.seasonId == nextSeason.id }
-                    val nextProgressByEp = nextSeasonProgress.associateBy { it.episodeId }
-                    _state.update {
-                        it.copy(
-                            selectedSeason = nextSeason, episodes = sortedNextEps,
-                            episodeProgressMap = nextProgressByEp,
-                            playTarget = PlayTarget(
-                                season = nextSeason, episode = firstNextEp,
-                                isResume = false, seekMs = 0L,
-                                label = "Play S${nextSeason.seasonNumber}E${firstNextEp.episodeNumber}"
+                                label = "Play S${targetSeason.seasonNumber}E${targetEpisode.episodeNumber}"
                             )
                         )
                     }
                     return@launch
                 }
+                val posMs = epProgress.positionMs
+                val durMs = epProgress.durationMs
+                val isNearlyFinished = durMs > 0 && (durMs - posMs) <= 30_000
+                val isPartiallyPlayed = posMs > 5_000 && !isNearlyFinished
+
+                // STEP 4: Partially played → Resume
+                if (isPartiallyPlayed) {
+                    _state.update {
+                        it.copy(
+                            selectedSeason = targetSeason, episodes = sortedEps,
+                            episodeProgressMap = progressByEpisode,
+                            playTarget = PlayTarget(
+                                season = targetSeason, episode = targetEpisode,
+                                isResume = true, seekMs = posMs,
+                                label = "Resume S${targetSeason.seasonNumber}E${targetEpisode.episodeNumber}"
+                            )
+                        )
+                    }
+                    return@launch
+                }
+
+                // STEP 5: Fully/nearly played → next episode in same season?
+                val epIndex = sortedEps.indexOf(targetEpisode)
+                if (epIndex + 1 < sortedEps.size) {
+                    val nextEp = sortedEps[epIndex + 1]
+                    _state.update {
+                        it.copy(
+                            selectedSeason = targetSeason, episodes = sortedEps,
+                            episodeProgressMap = progressByEpisode,
+                            playTarget = PlayTarget(
+                                season = targetSeason, episode = nextEp,
+                                isResume = false, seekMs = 0L,
+                                label = "Play S${targetSeason.seasonNumber}E${nextEp.episodeNumber}"
+                            )
+                        )
+                    }
+                    return@launch
+                }
+
+                // STEP 6: Last episode of season → advance to next season
+                val seasonIndex = sortedSeasons.indexOf(targetSeason)
+                if (seasonIndex + 1 < sortedSeasons.size) {
+                    val nextSeason = sortedSeasons[seasonIndex + 1]
+                    val nextEpsResult = vodRepository.getEpisodes(item.id, nextSeason.id)
+                    val sortedNextEps = nextEpsResult.getOrDefault(emptyList())
+                        .sortedBy { it.episodeNumber.toIntOrNull() ?: Int.MAX_VALUE }
+                    val firstNextEp = sortedNextEps.firstOrNull()
+                    if (firstNextEp != null) {
+                        val nextSeasonProgress = progressList.filter { it.seasonId == nextSeason.id }
+                        val nextProgressByEp = nextSeasonProgress.associateBy { it.episodeId }
+                        _state.update {
+                            it.copy(
+                                selectedSeason = nextSeason, episodes = sortedNextEps,
+                                episodeProgressMap = nextProgressByEp,
+                                playTarget = PlayTarget(
+                                    season = nextSeason, episode = firstNextEp,
+                                    isResume = false, seekMs = 0L,
+                                    label = "Play S${nextSeason.seasonNumber}E${firstNextEp.episodeNumber}"
+                                )
+                            )
+                        }
+                        return@launch
+                    }
+                }
+                // No next season → play least season / least episode
+                applyFirstSeasonTarget(item, sortedSeasons, progressList)
             }
-            // No next season → play least season / least episode
-            applyFirstSeasonTarget(item, sortedSeasons, progressList)
         }
     }
 
@@ -291,9 +314,7 @@ class VodDetailViewModel @Inject constructor(
         allProgress: List<PlaybackProgressEntity>
     ) {
         val firstSeason = sortedSeasons.firstOrNull() ?: return
-        val episodesResult = vodRepository.getEpisodes(item.id, firstSeason.id)
-        val sortedEps = episodesResult.getOrDefault(emptyList())
-            .sortedBy { it.episodeNumber.toIntOrNull() ?: Int.MAX_VALUE }
+        val sortedEps = episodesFor(item, firstSeason)
         val firstEp = sortedEps.firstOrNull() ?: return
         val seasonProgress = allProgress.filter { it.seasonId == firstSeason.id }
         val progressByEp = seasonProgress.associateBy { it.episodeId }
@@ -308,6 +329,28 @@ class VodDetailViewModel @Inject constructor(
                 )
             )
         }
+    }
+
+    // Returns the episodes for `season`, reusing state.episodes instead of
+    // hitting the network when that season is already the one loaded on
+    // screen. computePlayTarget()/applyFirstSeasonTarget() run every time
+    // refreshProgress() does (i.e. every time the player closes) purely to
+    // keep the "Play"/"Resume" label accurate - previously that meant a full
+    // re-fetch of the season's episode list every single time, even though
+    // the season you were just watching is almost always the one already
+    // loaded. A genuinely different season (e.g. progress now points at the
+    // next season's first episode after finishing the last one) still falls
+    // through to an actual network fetch, since that's new data, not a
+    // redundant refetch of what's already on screen.
+    private suspend fun episodesFor(item: PortalVodItem, season: PortalVodItem): List<PortalVodItem> {
+        val current = _state.value
+        val cached = if (current.selectedSeason?.id == season.id) current.episodes else null
+        val episodes = if (!cached.isNullOrEmpty()) {
+            cached
+        } else {
+            vodRepository.getEpisodes(item.id, season.id).getOrDefault(emptyList())
+        }
+        return episodes.sortedBy { it.episodeNumber.toIntOrNull() ?: Int.MAX_VALUE }
     }
 
     // =====================================================================
@@ -339,6 +382,20 @@ class VodDetailViewModel @Inject constructor(
         viewModelScope.launch {
             _state.update { it.copy(isLoading = true) }
             try {
+                // FIX ("player plays the same episode no matter which one I
+                // click, even though Stalker's own responses differ per
+                // episode") - ROOT CAUSE CORRECTED: episode.id IS the right
+                // value for this lookup's episode_id filter (an earlier fix
+                // attempt swapped this for episode.episodeId, which was
+                // wrong - reverted). The actual bug is one step later: the
+                // resulting create_link call also needs a "series" param
+                // set to this episode's series_number (mapped into the
+                // domain model as episodeNumber - see toDomain's mapping)
+                // for the portal to resolve the RIGHT file within a
+                // multi-episode-per-file container. Without it, create_link
+                // was defaulting to the container's first episode
+                // regardless of which fileId/episode was actually
+                // requested - see the createStreamLink call below.
                 val fileIdResult = vodRepository.getEpisodeFileId(
                     movieId = item.id,
                     seasonId = season.id,
@@ -350,7 +407,7 @@ class VodDetailViewModel @Inject constructor(
                 }
                 val fileId = fileIdResult.getOrThrow()
                 val cmd = "/media/file_$fileId.mpg"
-                val urlResult = vodRepository.createStreamLink(cmd, "vod")
+                val urlResult = vodRepository.createStreamLink(cmd, "vod", series = episode.episodeNumber)
                 if (urlResult.isFailure) {
                     _state.update { it.copy(isLoading = false) }
                     return@launch
@@ -404,7 +461,7 @@ class VodDetailViewModel @Inject constructor(
         }
     }
 
-    fun playMovie(onPlay: (String) -> Unit) {
+    fun playMovie(onPlay: (String) -> Unit, forceRestart: Boolean = false) {
         val item = _state.value.item ?: return
         viewModelScope.launch {
             _state.update { it.copy(isLoading = true) }
@@ -443,7 +500,27 @@ class VodDetailViewModel @Inject constructor(
                 playbackManager.currentGenres = item.genres
                 playbackManager.currentCountry = item.country
                 playbackManager.episodeQueue = emptyList()
-                playbackManager.pendingSeekMs = resolveResumePosition(fileId)
+                // FIX ("landscape resumes fine, portrait sometimes resumes/
+                // sometimes restarts"): was `resolveResumePosition(fileId)`,
+                // which decided resume-vs-restart by checking a SHARED,
+                // SINGLETON mutable flag (playbackManager.restartFromBeginning)
+                // that playMovieFromBeginning set to true just before calling
+                // this function. That flag leaks: if getMovieFileId/
+                // createStreamLink above ever fails (an early return@launch,
+                // more likely on a flakier mobile connection than a TV box's
+                // wifi/ethernet), the flag is set but NEVER consumed/reset -
+                // it was only ever cleared inside resolveResumePosition,
+                // which this early return skips entirely. It then silently
+                // forces the NEXT unrelated "Play"/resume click (any movie,
+                // any time later) to restart from 0 instead of resuming,
+                // which is exactly the "sometimes resumes, sometimes
+                // restarts" flakiness - not a portrait/landscape logic
+                // difference at all (both call this exact same function) -
+                // just more likely to surface wherever fileId/stream-link
+                // fetches fail more often, which mobile networks do.
+                // forceRestart is now an explicit, plain parameter with no
+                // shared/global state to leak.
+                playbackManager.pendingSeekMs = if (forceRestart) -1L else resolveResumePosition(fileId)
 
                 // FIX: Dual-layer check (Item + Category)
                 val isAdultContent = item.isCensored || adultSessionManager.isCategoryCensored(item.categoryId)
@@ -478,8 +555,7 @@ class VodDetailViewModel @Inject constructor(
                 )
             }
             _state.update { it.copy(movieProgress = null) }
-            playbackManager.restartFromBeginning = true
-            playMovie(onPlay)
+            playMovie(onPlay, forceRestart = true)
         }
     }
 
@@ -564,10 +640,6 @@ class VodDetailViewModel @Inject constructor(
     }
 
     private suspend fun resolveResumePosition(fileId: String): Long {
-        if (playbackManager.restartFromBeginning) {
-            playbackManager.restartFromBeginning = false
-            return -1L
-        }
         val profileId = prefs.activeProfileIdFlow.first()
         val serverId = sessionManager.activePortal.value?.serverId ?: 0
         val progress = vodRepository.getProgress(profileId, serverId, fileId)

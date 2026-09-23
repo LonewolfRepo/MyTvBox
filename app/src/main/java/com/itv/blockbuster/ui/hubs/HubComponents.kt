@@ -46,6 +46,7 @@ import com.itv.blockbuster.ui.theme.BbAccent
 import com.itv.blockbuster.ui.theme.BbBackground
 import com.itv.blockbuster.ui.theme.BbCard
 import com.itv.blockbuster.ui.theme.BbSurface
+import com.itv.blockbuster.ui.theme.RailCollapsedWidth
 import com.itv.blockbuster.ui.theme.BbTextPrimary
 import com.itv.blockbuster.ui.theme.BbTextSecondary
 
@@ -224,7 +225,7 @@ fun HubRowComposable(
     onItemFocused: (HubItem) -> Unit = {}
 ) {
     val formFactor = rememberFormFactor()
-    val collapsedMenuWidth = if (formFactor == FormFactor.MOBILE_PORTRAIT) 0.dp else 84.dp
+    val collapsedMenuWidth = if (formFactor == FormFactor.MOBILE_PORTRAIT) 0.dp else RailCollapsedWidth
 
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(

@@ -31,7 +31,12 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 data class VodBrowserState(
-    val isLoading: Boolean = false,
+    // FIX ("landing page starts on no items then goes to loading" - see
+    // HomeUiState's matching fix for the full explanation): defaulting to
+    // true means the loading UI (gated on isLoading && rows.isEmpty() in
+    // VodBrowserScreen) is what's shown on the very first frame, instead of
+    // a blank flash before init{}'s coroutine gets a dispatcher turn.
+    val isLoading: Boolean = true,
     val categories: List<PortalCategory> = emptyList(),
     val selectedCategory: PortalCategory? = null,
     val genres: List<PortalCategory> = emptyList(),

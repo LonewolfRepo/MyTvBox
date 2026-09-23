@@ -16,6 +16,9 @@ import com.itv.blockbuster.domain.model.PortalPage
 import com.itv.blockbuster.domain.model.PortalServerConfig
 import com.itv.blockbuster.domain.model.PortalVodItem
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.SerializationException
 import retrofit2.HttpException
 import java.io.IOException
@@ -24,6 +27,15 @@ import java.util.Locale
 import java.util.TimeZone
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.math.ceil
+
+// Max concurrent page requests when parallelizing get_ordered_list pagination
+// (see StalkerPortalService.fetchOrderedListPaginated). Kept modest and well
+// under the shared OkHttpClient's maxRequestsPerHost (8, see NetworkModule)
+// so a large episode list (e.g. 900 episodes / 14 per page = ~65 pages)
+// fetches in quick parallel bursts rather than either one-at-a-time (slow)
+// or all-at-once (looks like a flood to the portal server).
+private const val PARALLEL_PAGE_FETCH_LIMIT = 5
 
 @Singleton
 class StalkerPortalService @Inject constructor(
@@ -428,38 +440,67 @@ class StalkerPortalService @Inject constructor(
 
     suspend fun getSeasons(movieId: String): Result<List<PortalVodItem>> {
         return safe {
-            val allSeasons = mutableListOf<PortalVodItem>()
-            var currentPage = 1
-            var totalItems = Int.MAX_VALUE
-            while (allSeasons.size < totalItems) {
-                val url = buildLoadUrl("action=get_ordered_list&type=vod&movie_id=$movieId&p=$currentPage")
-                val response = api.getVodList(url)
-                totalItems = response.js.totalItems.toIntOrNull() ?: 0
-                val items = response.js.data.orEmpty().map { it.toDomain("series") }
-                allSeasons.addAll(items)
-                if (items.isEmpty() || allSeasons.size >= totalItems) break
-                currentPage++
-            }
-            allSeasons
+            fetchOrderedListPaginated(
+                query = { page -> "action=get_ordered_list&type=vod&movie_id=$movieId&p=$page" }
+            )
         }
     }
 
     suspend fun getEpisodes(movieId: String, seasonId: String): Result<List<PortalVodItem>> {
         return safe {
-            val allEpisodes = mutableListOf<PortalVodItem>()
-            var currentPage = 1
-            var totalItems = Int.MAX_VALUE
-            while (allEpisodes.size < totalItems) {
-                val url = buildLoadUrl("action=get_ordered_list&type=vod&movie_id=$movieId&season_id=$seasonId&p=$currentPage")
-                val response = api.getVodList(url)
-                totalItems = response.js.totalItems.toIntOrNull() ?: 0
-                val items = response.js.data.orEmpty().map { it.toDomain("series") }
-                allEpisodes.addAll(items)
-                if (items.isEmpty() || allEpisodes.size >= totalItems) break
-                currentPage++
-            }
-            allEpisodes
+            fetchOrderedListPaginated(
+                query = { page -> "action=get_ordered_list&type=vod&movie_id=$movieId&season_id=$seasonId&p=$page" }
+            )
         }
+    }
+
+    // Fetches a full get_ordered_list result set (seasons or episodes) across
+    // however many pages the portal reports, in parallel rather than one
+    // page at a time. Previously this was a plain `while` loop awaiting one
+    // page, then the next, then the next - for a 900-episode season at the
+    // portal's page size of 14 that's ~65 sequential round trips, timing out
+    // at around 30s.
+    //
+    // Page 1 is always fetched alone first, since it's the only request that
+    // tells us total_items and max_page_items (the portal's own page size -
+    // no need to guess it from how many items came back). Once we know the
+    // total page count, the REMAINING pages are fetched concurrently, but in
+    // small bounded batches (PARALLEL_PAGE_FETCH_LIMIT at a time) rather than
+    // all at once - firing 60+ simultaneous requests at a portal server
+    // looks like a burst/flood to it and risks the session being rate
+    // limited or the connection dropped, which would be worse than the
+    // original slowness. The batch size is kept comfortably under
+    // NetworkModule's shared OkHttpClient dispatcher's maxRequestsPerHost
+    // (8) so this doesn't queue behind - or get throttled by - the app's own
+    // HTTP client on top of the portal's own limits.
+    private suspend fun fetchOrderedListPaginated(query: (page: Int) -> String): List<PortalVodItem> {
+        val firstResponse = api.getVodList(buildLoadUrl(query(1)))
+        val firstPageItems = firstResponse.js.data.orEmpty().map { it.toDomain("series") }
+        val totalItems = firstResponse.js.totalItems.toIntOrNull() ?: firstPageItems.size
+        val pageSize = firstResponse.js.maxPageItems.toIntOrNull()?.takeIf { it > 0 } ?: 14
+
+        if (firstPageItems.isEmpty() || firstPageItems.size >= totalItems) {
+            return firstPageItems
+        }
+
+        val totalPages = ceil(totalItems.toDouble() / pageSize).toInt()
+        if (totalPages <= 1) return firstPageItems
+
+        val allItems = mutableListOf<PortalVodItem>()
+        allItems.addAll(firstPageItems)
+
+        (2..totalPages).chunked(PARALLEL_PAGE_FETCH_LIMIT).forEach { batch ->
+            val batchResults = coroutineScope {
+                batch.map { page ->
+                    async {
+                        api.getVodList(buildLoadUrl(query(page))).js.data.orEmpty().map { it.toDomain("series") }
+                    }
+                }.awaitAll()
+            }
+            batchResults.forEach { allItems.addAll(it) }
+        }
+
+        return allItems
     }
 
     suspend fun getEpisodeFileId(movieId: String, seasonId: String, episodeId: String): Result<String> {

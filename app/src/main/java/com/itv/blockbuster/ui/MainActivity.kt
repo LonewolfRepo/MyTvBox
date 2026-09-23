@@ -52,9 +52,21 @@ class MainActivity : ComponentActivity() {
     // background so it can be resumed later, i.e. "minimize"), immediately
     // tear the task down and kill the process outright, so there's nothing
     // left running to resume - the app terminates instead of minimizing.
+    // DISABLED (cold start): this used to finishAndRemoveTask() +
+    // killProcess() here, meaning every single re-entry into the app after
+    // pressing Home - not just the very first cold start after install -
+    // paid the full JIT-compilation/class-verification tax again, since
+    // ART's JIT cache lives in the process and there was never a warm
+    // process left to reuse. Letting onUserLeaveHint() do nothing lets
+    // Android background the task normally (kept warm in the LRU cache when
+    // memory allows, only actually killed by the OS under real memory
+    // pressure) - "user leaves and comes back" should now often resume a
+    // warm process instead of forcing a full cold start every time.
+    // Revisit if there's a hard requirement (DRM/licensing session
+    // freshness, a TV store certification rule, deliberate memory hygiene)
+    // that actually needs the process to die on every exit - flagged for a
+    // follow-up decision, not removed because it was wrong outright.
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        finishAndRemoveTask()
-        android.os.Process.killProcess(android.os.Process.myPid())
     }
 }

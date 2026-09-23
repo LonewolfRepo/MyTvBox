@@ -157,6 +157,13 @@ class PlayerViewModel @Inject constructor(
     fun playNextEpisode() {
         viewModelScope.launch {
             val next = playbackManager.nextInQueue() ?: return@launch
+            // FIX - ROOT CAUSE CORRECTED: next.id IS the right value for
+            // this lookup's episode_id filter (an earlier fix attempt
+            // swapped this for next.episodeId, which was wrong - reverted;
+            // see VodDetailViewModel's matching comment). The actual bug is
+            // the create_link call below missing the "series" param
+            // (next.episodeNumber, mapped from the raw series_number
+            // field) needed to resolve the right episode within the file.
             val fileIdResult = vodRepository.getEpisodeFileId(
                 movieId = playbackManager.currentMovieId,
                 seasonId = playbackManager.currentSeasonId,
@@ -165,7 +172,7 @@ class PlayerViewModel @Inject constructor(
             if (fileIdResult.isFailure) return@launch
             val fileId = fileIdResult.getOrThrow()
             val cmd = "/media/file_$fileId.mpg"
-            val urlResult = vodRepository.createStreamLink(cmd, "vod")
+            val urlResult = vodRepository.createStreamLink(cmd, "vod", series = next.episodeNumber)
             if (urlResult.isFailure) return@launch
             val url = urlResult.getOrThrow()
             if (url.isEmpty()) return@launch
@@ -174,8 +181,20 @@ class PlayerViewModel @Inject constructor(
             playbackManager.currentEpisodeNumber = next.episodeNumber
             playbackManager.currentEpisodeName = next.name
             playbackManager.currentVideoId = fileId          // keep progress keyed by file ID
+            // FIX: was also setting playbackManager.restartFromBeginning =
+            // true here - redundant (pendingSeekMs above already explicitly
+            // starts the next episode at 0) and the actual source of a
+            // cross-screen bug: that flag was a shared/global mutable flag
+            // VodDetailViewModel's playMovie() checked to decide resume-vs-
+            // restart for a COMPLETELY UNRELATED later movie. Since nothing
+            // in THIS autoplay-next-episode flow ever consumed/reset it,
+            // playing the next episode here would silently force the next
+            // movie's own "Play" button to restart from 0 instead of
+            // resuming, whenever the user next visited one. See
+            // VodDetailViewModel.playMovie's own comment for the full
+            // picture - it now takes an explicit forceRestart parameter
+            // instead, so there's no shared flag left to leak.
             playbackManager.pendingSeekMs = -1L              // next episode starts at 0
-            playbackManager.restartFromBeginning = true
             playbackManager.play(url)
         }
     }

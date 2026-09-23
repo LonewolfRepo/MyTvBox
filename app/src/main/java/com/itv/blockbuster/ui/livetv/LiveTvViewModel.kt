@@ -28,7 +28,13 @@ import javax.inject.Inject
 
 data class LiveTvUiState(
     val isLoading: Boolean = false,
-    val isConnecting: Boolean = false,
+    // FIX ("landing page starts on no items then goes to loading" - see
+    // HomeUiState's matching fix for the full explanation): defaulting to
+    // true means the loading UI (gated on isLoading || isConnecting in
+    // LiveTvScreen) is what's shown on the very first frame, matching this
+    // ViewModel's own connect flow which sets isConnecting = true as its
+    // first step.
+    val isConnecting: Boolean = true,
     val connectionError: String? = null,
     val categories: List<PortalCategory> = emptyList(),
     val selectedCategory: PortalCategory? = null,

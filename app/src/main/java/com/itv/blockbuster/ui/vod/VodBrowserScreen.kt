@@ -1,10 +1,12 @@
 package com.itv.blockbuster.ui.vod
 
 import android.util.Log
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -30,6 +32,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -56,12 +59,14 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.itv.blockbuster.domain.model.PortalCategory
 import com.itv.blockbuster.ui.components.CarouselRow
 import com.itv.blockbuster.ui.components.PosterGrid
+import com.itv.blockbuster.ui.components.rememberTopPinningBringIntoViewSpec
 import com.itv.blockbuster.ui.navigation.FormFactor
 import com.itv.blockbuster.ui.navigation.Routes
 import com.itv.blockbuster.ui.navigation.rememberFormFactor
 import com.itv.blockbuster.ui.theme.BbAccent
 import com.itv.blockbuster.ui.theme.BbBackground
 import com.itv.blockbuster.ui.theme.BbCard
+import com.itv.blockbuster.ui.theme.RailCollapsedWidth
 import com.itv.blockbuster.ui.theme.BbSurface
 import com.itv.blockbuster.ui.theme.BbTextPrimary
 import com.itv.blockbuster.ui.theme.BbTextSecondary
@@ -70,6 +75,7 @@ import com.itv.blockbuster.util.VodNavigationCache
 import kotlinx.coroutines.launch
 
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 fun VodBrowserScreen(
     contentType: String,
     onOpenDetail: (String) -> Unit,
@@ -200,6 +206,13 @@ fun VodBrowserScreen(
                         leadingIcon = { Icon(Icons.Default.Search, null, tint = BbTextSecondary) },
                         singleLine = true,
                         colors = OutlinedTextFieldDefaults.colors(
+                            // FIX: search fields had no container color at all (fully
+                            // transparent) - low/no contrast wherever this field is
+                            // overlaid on top of varying background content. An
+                            // explicit opaque container keeps it legible regardless of
+                            // what's behind it.
+                            focusedContainerColor = BbSurface,
+                            unfocusedContainerColor = BbSurface,
                             focusedBorderColor = BbAccent,
                             unfocusedBorderColor = BbCard,
                             cursorColor = BbAccent,
@@ -234,6 +247,13 @@ fun VodBrowserScreen(
                             leadingIcon = { Icon(Icons.Default.Search, null, tint = BbTextSecondary) },
                             singleLine = true,
                             colors = OutlinedTextFieldDefaults.colors(
+                                // FIX: search fields had no container color at all (fully
+                                // transparent) - low/no contrast wherever this field is
+                                // overlaid on top of varying background content. An
+                                // explicit opaque container keeps it legible regardless of
+                                // what's behind it.
+                                focusedContainerColor = BbSurface,
+                                unfocusedContainerColor = BbSurface,
                                 focusedBorderColor = BbAccent,
                                 unfocusedBorderColor = BbCard,
                                 cursorColor = BbAccent,
@@ -264,50 +284,62 @@ fun VodBrowserScreen(
                 val isAllCategories = state.selectedCategory?.id == "*" || state.selectedCategory?.id == "0"
 
                 if (isAllCategories) {
-                    LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
-                        itemsIndexed(state.rows, key = { _, row -> row.id }) { index, row ->
-                            CarouselRow(
-                                row = row,
-                                progressMap = progressMap,
-                                favoriteIds = favoriteIds,
-                                onItemClick = { item ->
-                                    VodNavigationCache.currentItem = item
-                                    onOpenDetail(item.id)
-                                },
-                                onFavoriteIconClick = { item ->
-                                    viewModel.toggleFavorite(item)
-                                },
-                                onLoadMore = { viewModel.loadMoreRowItems(row.id) },
-                                route = route,
-                                isFirstRow = index == listState.firstVisibleItemIndex,
-                                isLastRow = index == state.rows.lastIndex,
-                                // FIX: only attached to the landscape search field below,
-                                // so only wire it up there - portrait has no rail to escape
-                                // to anyway.
-                                upEscapeTarget = if (index == 0 && !isPortrait) topBarFocusRequester else null
-                            )
-                        }
+                    // FIX: D-pad focus - wraps this LazyColumn's own focus-
+                    // triggered scrolling in the same top-pinning
+                    // BringIntoViewSpec HomeScreen's carousel lists use (see
+                    // rememberTopPinningBringIntoViewSpec's doc comment), so
+                    // moving focus into the next/previous carousel snaps it
+                    // fully flush with the top of the viewport instead of
+                    // Compose's default "scroll the minimum needed" behavior
+                    // - which was leaving the tail end of the previous
+                    // carousel peeking on screen above the newly-focused one.
+                    CompositionLocalProvider(LocalBringIntoViewSpec provides rememberTopPinningBringIntoViewSpec()) {
+                        LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+                            itemsIndexed(state.rows, key = { _, row -> row.id }) { index, row ->
+                                CarouselRow(
+                                    row = row,
+                                    nextRowItems = state.rows.getOrNull(index + 1)?.items ?: emptyList(),
+                                    progressMap = progressMap,
+                                    favoriteIds = favoriteIds,
+                                    onItemClick = { item ->
+                                        VodNavigationCache.currentItem = item
+                                        onOpenDetail(item.id)
+                                    },
+                                    onFavoriteIconClick = { item ->
+                                        viewModel.toggleFavorite(item)
+                                    },
+                                    onLoadMore = { viewModel.loadMoreRowItems(row.id) },
+                                    route = route,
+                                    isFirstRow = index == listState.firstVisibleItemIndex,
+                                    isLastRow = index == state.rows.lastIndex,
+                                    // FIX: only attached to the landscape search field below,
+                                    // so only wire it up there - portrait has no rail to escape
+                                    // to anyway.
+                                    upEscapeTarget = if (index == 0 && !isPortrait) topBarFocusRequester else null
+                                )
+                            }
 
-                        // Vertical Pagination Trigger
-                        if (hasMoreCategories) {
-                            item {
-                                // FIX: re-fire whenever the row set or filters change while
-                                // the spinner is visible, so pagination never stalls after
-                                // a genre selection or an empty category batch.
-                                LaunchedEffect(state.rows.size, state.selectedCategory, state.selectedGenre) {
-                                    viewModel.loadMoreCategories()
-                                }
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(16.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    CircularProgressIndicator(
-                                        color = BbAccent,
-                                        strokeWidth = 2.dp,
-                                        modifier = Modifier.size(32.dp)
-                                    )
+                            // Vertical Pagination Trigger
+                            if (hasMoreCategories) {
+                                item {
+                                    // FIX: re-fire whenever the row set or filters change while
+                                    // the spinner is visible, so pagination never stalls after
+                                    // a genre selection or an empty category batch.
+                                    LaunchedEffect(state.rows.size, state.selectedCategory, state.selectedGenre) {
+                                        viewModel.loadMoreCategories()
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(16.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        CircularProgressIndicator(
+                                            color = BbAccent,
+                                            strokeWidth = 2.dp,
+                                            modifier = Modifier.size(32.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -328,7 +360,7 @@ fun VodBrowserScreen(
                             modifier = Modifier.fillMaxSize(),
                             upEscapeTarget = if (!isPortrait) topBarFocusRequester else null,
                             route = route,
-                            collapsedMenuWidth = if (isPortrait) 0.dp else 84.dp
+                            collapsedMenuWidth = if (isPortrait) 0.dp else RailCollapsedWidth
                         )
                     } else if (!state.isLoading) {
                         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

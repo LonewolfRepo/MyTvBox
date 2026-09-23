@@ -29,10 +29,18 @@ class VodRepository @Inject constructor(
     suspend fun getGenres(): Result<List<PortalCategory>> = portalService.fetchVodGenres()
 
     // FIX: Preserve original totalItems from the server to enable accurate pagination logic
+    // NEW: contentType now has THREE meaningful values - "series" and "vod"
+    // filter to just that type (unchanged), and anything else (Home passes
+    // "home") applies NO filter at all, returning the full mixed list - so
+    // Home, Movies, and TV Shows can all share this same fetch/filter path.
     suspend fun getList(contentType: String, categoryId: String, page: Int, pageSize: Int = 20, genreId: String = ""): Result<PortalPage<PortalVodItem>> {
         val result = portalService.fetchVodList(categoryId, page, pageSize, genreId)
         return result.map { vodPage ->
-            val filteredItems = if (contentType == "series") vodPage.items.filter { it.isSeries } else vodPage.items.filter { !it.isSeries }
+            val filteredItems = when (contentType) {
+                "series" -> vodPage.items.filter { it.isSeries }
+                "vod" -> vodPage.items.filter { !it.isSeries }
+                else -> vodPage.items
+            }
             PortalPage(filteredItems, vodPage.totalItems)
         }
     }
@@ -40,7 +48,11 @@ class VodRepository @Inject constructor(
     suspend fun search(contentType: String, query: String, categoryId: String, page: Int, genreId: String = ""): Result<PortalPage<PortalVodItem>> {
         val result = portalService.fetchVodSearch(query, categoryId, page, genreId)
         return result.map { vodPage ->
-            val filteredItems = if (contentType == "series") vodPage.items.filter { it.isSeries } else vodPage.items.filter { !it.isSeries }
+            val filteredItems = when (contentType) {
+                "series" -> vodPage.items.filter { it.isSeries }
+                "vod" -> vodPage.items.filter { !it.isSeries }
+                else -> vodPage.items
+            }
             PortalPage(filteredItems, vodPage.totalItems)
         }
     }
