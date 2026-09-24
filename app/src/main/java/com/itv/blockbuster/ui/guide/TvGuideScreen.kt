@@ -67,6 +67,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
@@ -123,14 +125,6 @@ private val CHANNEL_COL_PORTRAIT = 150.dp
 // on-device confirmation, but corrected to move in the right direction
 // this time.
 private val ROW_HEIGHT = 40.dp
-// D-pad focus: rough estimate of how many rows fit in the visible grid at
-// ROW_HEIGHT, used only to offset the initial scroll position so the
-// restored/focused row centers roughly in the middle of the viewport
-// rather than sitting flush at the top - see initialIndex's own doc
-// comment. Not exact (the real viewport isn't measured at that point),
-// but centeringBringIntoViewSpec corrects any drift on every subsequent
-// D-pad move against the actual measured container.
-private const val VISIBLE_ROWS_ESTIMATE = 7
 // FIX (UI redesign - "Adjust the card size, color (lighter grey)... of
 // the channels to approx match the image"): BbCard (0xFF1E1E26, a very
 // dark navy-grey) at various alphas read as noticeably darker than the
@@ -173,6 +167,29 @@ fun TvGuideScreen(
     val state by viewModel.uiState.collectAsState()
     val formFactor = rememberFormFactor()
     val isPortrait = formFactor == FormFactor.MOBILE_PORTRAIT
+    // D-pad focus: the real, measured height of the grid's own viewport
+    // (the Box wrapping GuideGridContent below the time header - see
+    // where onSizeChanged is attached to it), in pixels. Read by
+    // initialIndex/initialOffset below to compute the restore target's
+    // centered position EXACTLY, rather than guessing how many rows fit
+    // before any real layout has happened. onSizeChanged fires from the
+    // very first layout pass, which - given how much longer the channel
+    // network fetch itself takes - has already settled to the real value
+    // well before guideChannels is ever populated and this is actually
+    // needed, so there's no separate loading gate required for it here.
+    var gridHeightPx by remember { mutableStateOf(0) }
+    val density = LocalDensity.current
+    // D-pad focus: the whole auto-restore/focus-claim system below (and the
+    // centering scroll tied to it) is meaningful only on a device driven by
+    // a D-pad/remote - a touch device has no "rail" to escape to and no
+    // reason to programmatically steal focus toward a channel the user
+    // hasn't touched. FormFactor.TV is the precise check for that; the
+    // existing isPortrait only distinguishes MOBILE_PORTRAIT, which left
+    // MOBILE_LANDSCAPE getting the same D-pad-oriented treatment as TV
+    // (see upEscapeTarget's own isPortrait check below, unchanged from
+    // before this fix - a separate, narrower layout concern this one
+    // doesn't touch).
+    val isTv = formFactor == FormFactor.TV
     val pxPerMin = if (isPortrait) 2.5.dp else 5.dp
     val channelCol = if (isPortrait) CHANNEL_COL_PORTRAIT else CHANNEL_COL_TV
     val gridStart = (state.nowMin / 30) * 30
@@ -332,7 +349,8 @@ fun TvGuideScreen(
     val playingChannelId = state.previewChannel?.id ?: state.lastPlayedChannelId
 
     var hasClaimedInitial by remember { mutableStateOf(false) }
-    LaunchedEffect(state.isLoading) {
+    LaunchedEffect(state.isLoading, isTv) {
+        if (!isTv) return@LaunchedEffect
         if (state.isLoading) {
             claimFocus(FocusEntry.None)
         } else if (!hasClaimedInitial) {
@@ -340,13 +358,13 @@ fun TvGuideScreen(
             claimFocus(restoreOrFirstOrFallback(state.lastFocusedChannelId ?: playingChannelId))
         }
     }
-    LaunchedEffect(state.selectedCategory) {
-        if (hasClaimedInitial) {
+    LaunchedEffect(state.selectedCategory, isTv) {
+        if (isTv && hasClaimedInitial) {
             claimFocus(restoreOrFirstOrFallback(playingChannelId))
         }
     }
-    LaunchedEffect(debouncedSearchQuery) {
-        if (hasClaimedInitial) {
+    LaunchedEffect(debouncedSearchQuery, isTv) {
+        if (isTv && hasClaimedInitial) {
             claimFocus(if (guideChannels.isEmpty()) FocusEntry.Fallback else FocusEntry.FirstItem)
         }
     }
@@ -360,7 +378,14 @@ fun TvGuideScreen(
     // change); now that focusTarget is set imperatively by exactly one
     // trigger at a time, keying on focusTarget alone is sufficient and
     // correct.
-    LaunchedEffect(focusTarget) {
+    //
+    // D-pad focus: on a touch device, focusTarget is never set to anything
+    // but its initial None (the three triggers above are all gated on
+    // isTv), so this effect would otherwise fire once on mobile too,
+    // pointlessly arming setContentTransitioning and stealing focus toward
+    // topBarFocusRequester. Gated the same way for consistency.
+    LaunchedEffect(focusTarget, isTv) {
+        if (!isTv) return@LaunchedEffect
         android.util.Log.d("DpadFocus", "TvGuideScreen(route=$route): focusTarget=$focusTarget channelCount=${guideChannels.size} restoreTargetId=$restoreTargetId")
         // FIX (confirmed root cause of "focus landed on rail when category
         // filter changed"): this used to unconditionally call
@@ -428,22 +453,69 @@ fun TvGuideScreen(
     // every recomposition) - repositioning now only happens when the
     // displayed list itself has genuinely changed, never on an ordinary
     // preview click within the same one.
-    val scrollTargetToken = remember(state.selectedCategory, debouncedSearchQuery, sortMode, guideChannels.isEmpty()) { Any() }
-    val initialIndex = remember(scrollTargetToken) {
+    // FIX (confirmed root cause of "focus not landing on the playing
+    // channel on first entry, even though the list should start there"
+    // and, very likely, "Right from rail lands on the closest channel
+    // instead of the last focused one"): focusTarget now resolves
+    // ASYNCHRONOUSLY, via LaunchedEffect - a coroutine scheduled to run
+    // AFTER the composition pass completes, not a synchronous derived
+    // value the way it was before this screen's focus redesign. This
+    // token was still only keyed on the filter identity, not on
+    // restoreTargetId/focusTarget - so listState got created and pinned
+    // at index 0 using focusTarget's stale None value (its value in THIS
+    // composition pass), and by the time the LaunchedEffect actually ran
+    // and resolved it to RestoreItem a frame later, nothing was watching
+    // for that change to reposition the list. For a restore target deep
+    // in a 5000+ item list, that row was then never even composed - so it
+    // could never claim focus, and nothing was ever registered as the
+    // route's rail-escape target either, which is exactly the mechanism
+    // "Right from rail lands on the closest channel" describes. Safe to
+    // key on focusTarget directly now (unlike the old restoreTargetId,
+    // which used to change on every ordinary preview click before this
+    // redesign - see restoreTargetId's own doc comment): it's set
+    // imperatively by exactly the three legitimate triggers now, an
+    // ordinary click no longer touches it at all.
+    val scrollTargetToken = remember(focusTarget, sortMode) { Any() }
+    // D-pad focus: computes the EXACT index and pixel offset that puts the
+    // restore target's row precisely centered in the grid's real,
+    // measured viewport (gridHeightPx) - not an estimate of how many rows
+    // fit, and not a position that then relies on centeringSpec's
+    // automatic bring-into-view to correct it afterward. That correction
+    // is exactly what the previous approach needed and exactly what made
+    // it visible: pinning the target at its own literal index put it at
+    // the TOP of the viewport, and the subsequent animated scroll from top
+    // to center was a large, plainly visible jump, not a small nudge.
+    // With rowHeightPx and gridHeightPx both real, measured quantities,
+    // the row starts EXACTLY where centeringSpec would put it anyway, so
+    // its calculateScrollDistance call on focus gain computes zero (or a
+    // sub-pixel rounding difference, imperceptible) - nothing left to
+    // animate.
+    val initialPosition = remember(scrollTargetToken, gridHeightPx) {
         val idx = restoreTargetId?.let { id -> guideChannels.indexOfFirst { it.id == id } } ?: -1
-        // FIX (requirement change - "don't pin the focused channel on top,
-        // pin it in the middle"): was `if (idx >= 0) idx else 0`, which put
-        // the target row as the LazyColumn's literal firstVisibleItem -
-        // flush against the top edge. Offsetting by half the estimated
-        // visible-row count instead centers it. This is necessarily an
-        // estimate (the real viewport isn't measured yet at this point),
-        // but centeringBringIntoViewSpec below keeps it centered correctly
-        // against the actual measured container on every subsequent D-pad
-        // move, so any drift here only affects the very first frame.
-        if (idx >= 0) maxOf(0, idx - VISIBLE_ROWS_ESTIMATE / 2) else 0
+        if (idx < 0 || gridHeightPx <= 0) {
+            0 to 0
+        } else {
+            val rowHeightPx = with(density) { ROW_HEIGHT.toPx() }
+            // Target row's top edge, in px from the viewport's own top,
+            // once centered: half the leftover space above/below the row.
+            val centerOffsetPx = (gridHeightPx - rowHeightPx) / 2f
+            // How many whole rows fit above that point - those rows sit
+            // above the viewport (scrolled past), and the target becomes
+            // firstVisibleItemIndex + that count.
+            val rowsAbove = kotlin.math.ceil(centerOffsetPx / rowHeightPx).toInt().coerceAtLeast(0)
+            val firstVisibleIndex = (idx - rowsAbove).coerceAtLeast(0)
+            // The remaining fractional row is how far the first visible
+            // row itself is scrolled up past its own top - i.e. exactly
+            // what firstVisibleItemScrollOffset means.
+            val offsetPx = (rowsAbove * rowHeightPx - centerOffsetPx).toInt().coerceAtLeast(0)
+            firstVisibleIndex to offsetPx
+        }
     }
-    val listState = rememberSaveable(scrollTargetToken, saver = LazyListState.Saver) {
-        LazyListState(firstVisibleItemIndex = initialIndex)
+    val listState = rememberSaveable(scrollTargetToken, gridHeightPx, saver = LazyListState.Saver) {
+        LazyListState(
+            firstVisibleItemIndex = initialPosition.first,
+            firstVisibleItemScrollOffset = initialPosition.second
+        )
     }
 
     // FIX: was a plain var mutated INSIDE the async scrollToItem
@@ -473,10 +545,10 @@ fun TvGuideScreen(
     // comment above for why that used to race).
     LaunchedEffect(scrollTargetToken) {
         FocusRegistry.setContentTransitioning(true)
-        settledToken = scrollTargetToken
         if (focusTarget == FocusEntry.FirstItem || focusTarget is FocusEntry.RestoreItem) {
             runCatching { FocusRegistry.firstItemTarget(route).requestFocus() }
         }
+        settledToken = scrollTargetToken
         FocusRegistry.setContentTransitioning(false)
     }
 
@@ -683,7 +755,11 @@ fun TvGuideScreen(
                 HorizontalDivider(color = BbCard)
 
                 // ── Guide grid ──
-                Box(Modifier.weight(1f)) {
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .onSizeChanged { gridHeightPx = it.height }
+                ) {
                     // FIX (VerifyError crash - see LandscapeGuideHeader's own doc
                     // comment for the full explanation): extracted alongside it,
                     // as the other largest self-contained block in a function
@@ -698,6 +774,7 @@ fun TvGuideScreen(
                         focusClaimId = focusClaimId,
                         route = route,
                         isPortrait = isPortrait,
+                        isTv = isTv,
                         topBarFocusRequester = topBarFocusRequester,
                         restoreTargetId = restoreTargetId,
                         channelCol = channelCol,
@@ -762,6 +839,7 @@ private fun BoxScope.GuideGridContent(
     focusClaimId: Any,
     route: String,
     isPortrait: Boolean,
+    isTv: Boolean,
     topBarFocusRequester: FocusRequester,
     restoreTargetId: String?,
     channelCol: Dp,
@@ -783,33 +861,7 @@ private fun BoxScope.GuideGridContent(
             }
         }
         else -> {
-            // D-pad focus: centers the focused/newly-scrolled-to row in the
-            // viewport instead of pinning it to the top, per the "pin it in
-            // the middle" requirement. Deliberately different from the spec
-            // that caused an ANR on this same screen previously
-            // (rememberTopPinningBringIntoViewSpec, built for Home/Live
-            // TV's own carousel header layout): that one subtracted a
-            // hard-coded header-height CONSTANT that didn't correspond to
-            // anything in TV Guide's structurally different layout, and an
-            // overshoot there could re-trigger itself in an infinite
-            // oscillation. This one uses ONLY the parameters
-            // BringIntoViewSpec itself provides (the item's offset and
-            // size, and the real MEASURED container size) - a standard,
-            // self-contained "center the item" formula with no cross-screen
-            // constant to ever mismatch, and no possible unbounded overshoot
-            // since every input is a real, bounded, already-measured
-            // quantity. The isFinite() guard is a defensive no-op in the
-            // normal case, kept only in case of a genuine 0-sized
-            // measurement glitch.
-            val centeringSpec = remember {
-                object : BringIntoViewSpec {
-                    override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float {
-                        val distance = offset - (containerSize - size) / 2f
-                        return if (distance.isFinite()) distance else 0f
-                    }
-                }
-            }
-            CompositionLocalProvider(LocalBringIntoViewSpec provides centeringSpec) {
+            val gridContent: @Composable () -> Unit = {
                 LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
                     itemsIndexed(guideChannels, key = { _, channel -> channel.id }) { index, channel ->
                         GuideChannelRow(
@@ -826,6 +878,7 @@ private fun BoxScope.GuideGridContent(
                             focusTarget = focusTarget,
                             focusClaimId = focusClaimId,
                             route = route,
+                            isTv = isTv,
                             isBottomRow = index == guideChannels.lastIndex,
                             isTopRow = index == 0,
                             upEscapeTarget = if (!isPortrait) topBarFocusRequester else null,
@@ -839,6 +892,7 @@ private fun BoxScope.GuideGridContent(
                             // now keeps the registry pointed at itself the
                             // instant it's actually focused, rather than
                             // some rows retroactively guessing they qualify.
+                            // GuideChannelRow itself no-ops this on non-TV.
                             onChannelFocused = { viewModel.setLastFocusedChannel(channel.id) },
                             onChannelClick = {
                                 // CLICK ON CHANNEL CURRENTLY PLAYING -> FULLSCREEN
@@ -886,6 +940,41 @@ private fun BoxScope.GuideGridContent(
                         }
                     }
                 }
+            }
+            if (isTv) {
+                // D-pad focus: centers the focused/newly-scrolled-to row in
+                // the viewport instead of pinning it to the top, per the
+                // "pin it in the middle" requirement - TV only (see isTv's
+                // own doc comment in TvGuideScreen: a touch device has no
+                // D-pad-driven focus movement for this to react to, and
+                // should just get Compose's own default scroll behavior).
+                // Deliberately different from the spec that caused an ANR
+                // on this same screen previously
+                // (rememberTopPinningBringIntoViewSpec, built for Home/Live
+                // TV's own carousel header layout): that one subtracted a
+                // hard-coded header-height CONSTANT that didn't correspond
+                // to anything in TV Guide's structurally different layout,
+                // and an overshoot there could re-trigger itself in an
+                // infinite oscillation. This one uses ONLY the parameters
+                // BringIntoViewSpec itself provides (the item's offset and
+                // size, and the real MEASURED container size) - a standard,
+                // self-contained "center the item" formula with no
+                // cross-screen constant to ever mismatch, and no possible
+                // unbounded overshoot since every input is a real, bounded,
+                // already-measured quantity. The isFinite() guard is a
+                // defensive no-op in the normal case, kept only in case of
+                // a genuine 0-sized measurement glitch.
+                val centeringSpec = remember {
+                    object : BringIntoViewSpec {
+                        override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float {
+                            val distance = offset - (containerSize - size) / 2f
+                            return if (distance.isFinite()) distance else 0f
+                        }
+                    }
+                }
+                CompositionLocalProvider(LocalBringIntoViewSpec provides centeringSpec, content = gridContent)
+            } else {
+                gridContent()
             }
             // FIX (UI redesign - "Extend the line from top of the time
             // instead of from channel list"): the playhead line + triangle
@@ -1032,7 +1121,8 @@ private fun LandscapeGuideHeader(
                             onValueChange = onSearchQueryChange,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .focusRequester(searchFieldFocusRequester),
+                                .focusRequester(searchFieldFocusRequester)
+                                .focusProperties { left = FocusRegistry.leftEscapeTarget() },
                             textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp, color = BbTextPrimary),
                             singleLine = true,
                             cursorBrush = SolidColor(BbAccent)
@@ -1048,7 +1138,9 @@ private fun LandscapeGuideHeader(
         // to match the reference layout.
         SearchIconButton(
             onClick = { onShowSearchBarChange(!showSearchBar) },
-            modifier = Modifier.focusRequester(searchButtonFocusRequester)
+            modifier = Modifier
+                .focusRequester(searchButtonFocusRequester)
+                .focusProperties { left = FocusRegistry.leftEscapeTarget() }
         )
         Spacer(Modifier.width(12.dp))
         // FIX (UI redesign - "filters matching the format and height of
@@ -1066,7 +1158,8 @@ private fun LandscapeGuideHeader(
                     }
                 )
             },
-            compact = true
+            compact = true,
+            modifier = Modifier.focusProperties { left = FocusRegistry.leftEscapeTarget() }
         )
         Spacer(Modifier.width(12.dp))
         CategoryDropdown(
@@ -1204,6 +1297,11 @@ private fun GuideChannelRow(
     // which are separate concerns that happen to share the same
     // requester), independent of the auto-claim migration below.
     route: String,
+    // D-pad focus: gates the pre-registration below and the
+    // onFocusChanged-driven continuous re-registration/callback further
+    // down - both are meaningless on a touch device with no rail to escape
+    // to (see isTv's own doc comment in TvGuideScreen).
+    isTv: Boolean,
     // D-pad focus: the channel cell is always the leftmost item in every row
     // (a vertical list of rows, not a single boundary row), so every row's
     // cell - not just the first - escapes to the rail on Left. isBottomRow
@@ -1258,8 +1356,8 @@ private fun GuideChannelRow(
     // it's a separate concern (see the route param's own doc comment)
     // needed regardless of which claimFocusEntry call, if either, actually
     // fires for this specific row.
-    val isLiveFirstItemTarget = focusTarget == FocusEntry.FirstItem && isFirstVisible
-    val isLiveRestoreTarget = focusTarget is FocusEntry.RestoreItem && isRestoreTarget
+    val isLiveFirstItemTarget = isTv && focusTarget == FocusEntry.FirstItem && isFirstVisible
+    val isLiveRestoreTarget = isTv && focusTarget is FocusEntry.RestoreItem && isRestoreTarget
     if (isLiveFirstItemTarget || isLiveRestoreTarget) {
         android.util.Log.d("DpadFocus", "GuideChannelRow channel=${channel.id} registering as firstItem (isLiveFirstItemTarget=$isLiveFirstItemTarget isLiveRestoreTarget=$isLiveRestoreTarget)")
         FocusRegistry.registerFirstItem(route, channelFocusRequester)
@@ -1336,23 +1434,35 @@ private fun GuideChannelRow(
                     } else Modifier
                 )
                 .focusable(interactionSource = interactionSource)
-                .onFocusChanged {
-                    if (it.isFocused) {
-                        android.util.Log.d("DpadFocus", "GuideChannelRow channel=${channel.id} onFocusChanged: isFocused=true")
-                        // D-pad focus: unconditional, regardless of whether
-                        // this row was ever "eligible" per focusTarget above
-                        // - the moment a row actually has focus, it IS the
-                        // route's correct Right-escape target, full stop.
-                        // This is what makes "restore to last focused item"
-                        // work for ordinary Up/Down navigation too, not just
-                        // the one row focusTarget originally computed.
-                        FocusRegistry.registerFirstItem(route, channelFocusRequester)
-                        onChannelFocused(channel.id)
-                    }
-                }
                 .padding(horizontal = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // FIX (confirmed root cause of "Right from rail lands on the
+            // closest channel instead of the last focused one"): the block
+            // this replaced was a raw .onFocusChanged{} placed AFTER
+            // .focusable() in the modifier chain above - onFocusChanged
+            // observes the focus state of whatever comes AFTER it (further
+            // down the chain, closer to the actual content), so positioned
+            // there it was watching nothing, not the .focusable() node
+            // itself. It never fired even once across an entire session of
+            // active D-pad navigation (confirmed by the complete absence
+            // of its own log line in a real device capture) - meaning no
+            // row ever re-registered itself as the route's firstItem once
+            // the original pre-registered target scrolled out of view,
+            // which is exactly why the registry was left empty by the time
+            // the user pressed Left. channelFocused (via
+            // collectIsFocusedAsState() above) is the interactionSource-
+            // reported focus state already proven correct on this same row
+            // for the border highlight, and unlike a raw onFocusChanged
+            // modifier its correctness doesn't depend on chain position -
+            // reacting to it here is the reliable equivalent.
+            LaunchedEffect(channelFocused) {
+                if (channelFocused && isTv) {
+                    android.util.Log.d("DpadFocus", "GuideChannelRow channel=${channel.id} onFocusChanged: isFocused=true")
+                    FocusRegistry.registerFirstItem(route, channelFocusRequester)
+                    onChannelFocused(channel.id)
+                }
+            }
             // Show the channel's number (fallback: channel id, then row index)
             Text(
                 text = channel.number.ifBlank { channel.id }.ifBlank { "${index + 1}" },
@@ -1520,6 +1630,7 @@ private fun CategoryDropdown(
                 .background(if (isFocused) BbAccent.copy(alpha = 0.1f) else BbCard)
                 .then(if (isFocused) Modifier.border(2.dp, BbAccent, RoundedCornerShape(8.dp)) else Modifier)
                 .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
+                .focusProperties { left = FocusRegistry.leftEscapeTarget() }
                 .clickable { expanded = true }
                 .focusable()
                 .onFocusChanged { isFocused = it.isFocused }

@@ -10,13 +10,19 @@ import androidx.compose.ui.Modifier
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import com.itv.blockbuster.data.player.PlaybackManager
 import com.itv.blockbuster.ui.navigation.AppRoot
 import com.itv.blockbuster.ui.theme.BbBackground
 import com.itv.blockbuster.ui.theme.BlockbusterTheme
 import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+
+    // Level 1: Inject PlaybackManager so background playback can be stopped
+    // safely without killing the whole app process.
+    @Inject lateinit var playbackManager: PlaybackManager
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -38,6 +44,19 @@ class MainActivity : ComponentActivity() {
                     AppRoot()
                 }
             }
+        }
+    }
+
+    // Level 1 background cleanup:
+    // Stop playback when the app is no longer visible.
+    //
+    // Guard against configuration changes so normal Activity recreation
+    // does not unnecessarily stop playback.
+    override fun onStop() {
+        super.onStop()
+
+        if (!isChangingConfigurations) {
+            playbackManager.stopBackgroundPlayback()
         }
     }
 

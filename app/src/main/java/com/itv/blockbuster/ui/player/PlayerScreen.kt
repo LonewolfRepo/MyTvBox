@@ -115,7 +115,18 @@ fun PlayerScreen(
     // ExoPlayer buffers, and surfacing failure itself if the stream
     // actually turns out to be bad (rather than a separate network probe
     // deciding that before the player ever opened).
-    var isConnecting by remember { mutableStateOf(true) }
+    //
+    // FIX (TV Guide PIP -> Fullscreen): this used to always start as true.
+    // When entering fullscreen from the TV Guide PIP, the same singleton
+    // ExoPlayer is already prepared/playing, so no new STATE_READY event
+    // fires after PlayerScreen attaches its listener. That left the
+    // "Connecting..." overlay visible even though video was already playing.
+    // Initialize it from the actual current player state instead.
+    var isConnecting by remember(streamUrl) {
+        val alreadyActive = player.currentMediaItem?.mediaId == streamUrl &&
+                (player.playbackState == Player.STATE_READY || player.isPlaying)
+        mutableStateOf(!alreadyActive)
+    }
     val autoPlayNext by viewModel.autoPlayNext.collectAsState()
 
     val rewindMs by viewModel.rewindMs.collectAsState()
@@ -190,6 +201,17 @@ fun PlayerScreen(
                 }
             }
 
+            // FIX (TV Guide PIP -> Fullscreen): if the player transitions
+            // into actual playback while this screen is visible, hide the
+            // connecting overlay immediately. This covers cases where the
+            // player was already prepared but not yet marked as playing
+            // when the listener was attached.
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (isPlaying) {
+                    isConnecting = false
+                }
+            }
+
             // NEW: this is what replaces the old pre-navigation reachability
             // check's failure path. A bad/unreachable stream now surfaces
             // here, as a genuine ExoPlayer error, instead of being caught
@@ -203,6 +225,24 @@ fun PlayerScreen(
             }
         }
         player.addListener(listener)
+
+        // FIX (TV Guide PIP -> Fullscreen): if entering fullscreen from the
+        // TV Guide PIP, the player may already be READY on this exact stream.
+        // In that case no new onPlaybackStateChanged(STATE_READY) callback
+        // will fire, so clear the connecting state immediately and apply any
+        // pending seek if one exists.
+        if (player.currentMediaItem?.mediaId == streamUrl &&
+            player.playbackState == Player.STATE_READY
+        ) {
+            isConnecting = false
+            val seekTo = playbackManager.pendingSeekMs
+            if (seekTo > 0) {
+                playbackManager.pendingSeekMs = -1L
+                player.seekTo(seekTo)
+                player.playWhenReady = true
+                player.play()
+            }
+        }
 
         playbackManager.play(streamUrl)
 

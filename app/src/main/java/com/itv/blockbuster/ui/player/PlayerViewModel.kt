@@ -55,7 +55,26 @@ class PlayerViewModel @Inject constructor(
     private val _liveBanner = MutableStateFlow<LiveBannerData?>(null)
     val liveBanner: StateFlow<LiveBannerData?> = _liveBanner.asStateFlow()
 
+    // Level 1 background cleanup:
+    // Cache the latest profile/server IDs so progress can be captured
+    // synchronously before PlaybackManager stops the player.
+    private var currentProfileId: Int = 0
+    private var currentServerId: Int = 0
+
+    // Level 1 background cleanup:
+    // Stable callback identity so onCleared() only clears this ViewModel's
+    // callback and does not accidentally clear a callback installed by a
+    // newer PlayerViewModel instance.
+    private val backgroundStopCallback: () -> Unit = {
+        captureProgressBeforeBackgroundStop()
+    }
+
     init {
+        // Level 1 background cleanup:
+        // If the app goes to the background while this PlayerViewModel is
+        // active, save VOD progress before PlaybackManager stops playback.
+        playbackManager.onBeforeBackgroundStop = backgroundStopCallback
+
         viewModelScope.launch {
             combine(
                 prefs.activeProfileIdFlow,
@@ -65,10 +84,23 @@ class PlayerViewModel @Inject constructor(
             }.collect { pair ->
                 val p = pair.first
                 val s = pair.second
+
+                currentProfileId = p
+                currentServerId = s
+
                 _rewindMs.value = settings.getInt(p, s, "rewind_interval", 15) * 1000L
                 _forwardMs.value = settings.getInt(p, s, "forward_interval", 30) * 1000L
             }
         }
+    }
+
+    override fun onCleared() {
+        // Level 1 background cleanup:
+        // Remove this ViewModel's callback only if it is still the active one.
+        if (playbackManager.onBeforeBackgroundStop === backgroundStopCallback) {
+            playbackManager.onBeforeBackgroundStop = null
+        }
+        super.onCleared()
     }
 
     // =====================================================================
@@ -151,6 +183,56 @@ class PlayerViewModel @Inject constructor(
                 positionMs = player.currentPosition,
                 durationMs = player.duration
             )
+        }
+    }
+
+    /**
+     * Level 1 background cleanup:
+     *
+     * Captures the current playback position synchronously while the player
+     * is still valid, then saves it asynchronously.
+     *
+     * This is used by PlaybackManager.stopBackgroundPlayback() before the
+     * player is stopped/cleared.
+     */
+    private fun captureProgressBeforeBackgroundStop() {
+        runCatching {
+            val player = playbackManager.player
+            val videoId = playbackManager.currentVideoId
+
+            if (videoId.isEmpty() || player.duration <= 0) return@runCatching
+
+            // Don't save until the video has played for at least 10 seconds.
+            // This also protects the saved resume position from being
+            // overwritten with ~0 right after a seek is requested.
+            if (player.currentPosition < 10_000) return@runCatching
+
+            val position = player.currentPosition
+            val duration = player.duration
+
+            val movieId = playbackManager.currentMovieId
+            val seasonId = playbackManager.currentSeasonId
+            val seasonNumber = playbackManager.currentSeasonNumber
+            val episodeId = playbackManager.currentEpisodeId
+            val episodeNumber = playbackManager.currentEpisodeNumber
+
+            val profileId = currentProfileId
+            val serverId = currentServerId
+
+            viewModelScope.launch {
+                vodRepository.saveProgress(
+                    profileId = profileId,
+                    serverId = serverId,
+                    movieId = movieId,
+                    seasonId = seasonId,
+                    seasonNumber = seasonNumber,
+                    episodeId = episodeId,
+                    episodeNumber = episodeNumber,
+                    videoId = videoId,
+                    positionMs = position,
+                    durationMs = duration
+                )
+            }
         }
     }
 

@@ -62,6 +62,12 @@ class PlaybackManager @Inject constructor(
     @Volatile
     var keepLivePlayingOnExit: Boolean = false
 
+    // ── Level 1 background cleanup ─────────────────────────────────────
+    // Optional callback invoked right before background playback is stopped.
+    // PlayerViewModel uses this to capture/save VOD progress while the
+    // player still has a valid position/duration.
+    var onBeforeBackgroundStop: (() -> Unit)? = null
+
     // ── Live context ──
     var currentChannel: PortalChannel? = null
     var epgPrograms: List<EpgProgram> = emptyList()
@@ -160,6 +166,36 @@ class PlaybackManager @Inject constructor(
     fun stopPlayback() {
         player.stop()
         player.clearMediaItems()
+        clearLiveContext()
+    }
+
+    /**
+     * Level 1 background cleanup.
+     *
+     * This is intentionally stronger than a simple pause, but safer than
+     * fully releasing/recreating ExoPlayer.
+     *
+     * It:
+     *  - gives PlayerViewModel a chance to save VOD progress,
+     *  - stops playback,
+     *  - clears media items so no stream remains active,
+     *  - resets pending seek,
+     *  - clears the keep-live PIP handoff flag,
+     *  - resets fullscreen state,
+     *  - clears live channel context.
+     *
+     * It does NOT kill the app process.
+     */
+    fun stopBackgroundPlayback() {
+        runCatching { onBeforeBackgroundStop?.invoke() }
+
+        player.stop()
+        player.clearMediaItems()
+
+        pendingSeekMs = -1L
+        keepLivePlayingOnExit = false
+        isFullscreenActive = false
+
         clearLiveContext()
     }
 }
